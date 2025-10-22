@@ -1,3 +1,7 @@
+# Don't Remove Credit @VJ_Botz
+# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
+# Ask Doubt on telegram @KingVJ01
+
 import random
 import requests
 import humanize
@@ -11,24 +15,29 @@ from urllib.parse import quote_plus, urlencode
 from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
 from TechVJ.util.human_readable import humanbytes
 
-async def encode(string):
+# Ek naya function jo direct stream URL banayega
+async def get_stream_url(client, message_id):
     try:
-        string_bytes = string.encode("ascii")
-        base64_bytes = base64.urlsafe_b64encode(string_bytes)
-        base64_string = (base64_bytes.decode("ascii")).strip("=")
-        return base64_string
-    except:
-        pass
+        msg = await client.get_messages(LOG_CHANNEL, message_id)
+        file_name = get_name(msg)
+        file_hash = get_hash(msg)
+        return f"https://skill-neast.onrender.com/dl/{message_id}/{quote_plus(file_name)}?hash={file_hash}"
+    except Exception as e:
+        print(f"Error generating stream URL: {e}")
+        return None
+
+async def encode(string):
+    string_bytes = string.encode("ascii")
+    base64_bytes = base64.urlsafe_b64encode(string_bytes)
+    base64_string = (base64_bytes.decode("ascii")).strip("=")
+    return base64_string
 
 async def decode(base64_string):
-    try:
-        base64_string = base64_string.strip("=") # links generated before this commit will be having = sign, hence striping them to handle padding errors.
-        base64_bytes = (base64_string + "=" * (-len(base64_string) % 4)).encode("ascii")
-        string_bytes = base64.urlsafe_b64decode(base64_bytes) 
-        string = string_bytes.decode("ascii")
-        return string
-    except:
-        pass
+    base64_string = base64_string.strip("=") # links generated before this commit will be having = sign, hence striping them to handle padding errors.
+    base64_bytes = (base64_string + "=" * (-len(base64_string) % 4)).encode("ascii")
+    string_bytes = base64.urlsafe_b64decode(base64_bytes)  
+    string = string_bytes.decode("ascii")
+    return string
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start(client, message):
@@ -39,15 +48,15 @@ async def start(client, message):
             await db.set_name(message.from_user.id, name=name.text)
         else:
             return await message.reply("**Wrong Input Start Your Process Again By Hitting /start**")
-        link = await client.ask(message.chat.id, "<b>Now Send Me Your Telegram Channel Link, Channel Link Will Show On Your Website.\n\nSend Like This <code>https://t.me/VJ_Bots</code> ✅\n\nDo not send like this @VJ_Bots ❌</b>")
+        link = await client.ask(message.chat.id, "<b>Now Send Me Your Telegram Channel Link, Channel Link Will Show On Your Website.\n\nSend Like This <code>https://t.me/VJ_Bots</code> âœ…\n\nDo not send like this @VJ_Bots âŒ</b>")
         if link.text and link.text.startswith(('http://', 'https://')):
             await db.set_link(message.from_user.id, link=link.text)
         else:
             return await message.reply("**Wrong Input Start Your Process Again By Hitting /start**")
         await checkdb.add_user(message.from_user.id, message.from_user.first_name)
-        return await message.reply("<b>Congratulations 🎉\n\nYour Account Created Successfully.\n\nFor Uploading File In Quality Option Use Command /quality\n\nMore Commands Are /account and /update and /withdraw\n\nFor Without Quality Option Direct Send File To Bot.</b>")
+        return await message.reply("<b>Congratulations ðŸŽ‰\n\nYour Account Created Successfully.\n\nFor Uploading File In Quality Option Use Command /quality\n\nMore Commands Are /account and /update and /withdraw\n\nFor Without Quality Option Direct Send File To Bot.</b>")
     else:
-        rm = InlineKeyboardMarkup([[InlineKeyboardButton("✨ Update Channel", url="https://t.me/VJ_Disk")]])
+        rm = InlineKeyboardMarkup([[InlineKeyboardButton("âœ¨ Update Channel", url="https://t.me/VJ_Disk")]])
         await client.send_message(
             chat_id=message.from_user.id,
             text=script.START_TXT.format(message.from_user.mention),
@@ -67,25 +76,69 @@ async def update(client, message):
             await db.set_name(message.from_user.id, name=name.text)
         else:
             return await message.reply("**Wrong Input Start Your Process Again By Hitting /update**")
-        link = await client.ask(message.chat.id, "<b>Now Send Me Your Telegram Channel Link, Channel Link Will Show On Your Website.\n\nSend Like This <code>https://t.me/VJ_Bots</code> ✅\n\nDo not send like this @VJ_Bots ❌</b>")
+        link = await client.ask(message.chat.id, "<b>Now Send Me Your Telegram Channel Link, Channel Link Will Show On Your Website.\n\nSend Like This <code>https://t.me/VJ_Bots</code> âœ…\n\nDo not send like this @VJ_Bots âŒ</b>")
         if link.text and link.text.startswith(('http://', 'https://')):
             await db.set_link(message.from_user.id, link=link.text)
         else:
             return await message.reply("**Wrong Input Start Your Process Again By Hitting /update**")
         return await message.reply("<b>Update Successfully.</b>")
 
-@Client.on_message(filters.private & (filters.document | filters.video))
-async def stream_start(client, message):
+@Client.on_message(filters.private & (filters.document | filters.video | filters.photo | filters.audio))
+async def universal_handler(client, message):
+    if not message.media:
+        return await message.reply("Please send a file (video, document, audio, etc.).")
+
     file = getattr(message, message.media.value)
+    file_type = message.media.value
     fileid = file.file_id
-    user_id = message.from_user.id
+    
     log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=fileid)
-    params = {'u': user_id, 'w': str(log_msg.id), 's': str(0), 't': str(0)}
-    url1 = f"{urlencode(params)}"
-    link = await encode(url1)
-    encoded_url = f"{LINK_URL}?Tech_VJ={link}"
-    rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖇️ Open Link", url=encoded_url)]])
-    await message.reply_text(text=f"<code>{encoded_url}</code>", reply_markup=rm)
+    file_name = get_name(log_msg)
+    
+    # Check if the file is a video
+    is_video = file_type == 'video' or (file_type == 'document' and file.mime_type and file.mime_type.startswith('video/'))
+    
+    if is_video:
+        # Check if the video file has a .ts extension
+        is_ts_file = file_name.lower().endswith('.ts')
+        
+        if is_ts_file:
+            # For .ts files, only give the direct download link
+            direct_link = await get_stream_url(client, log_msg.id)
+            
+            response_message = (
+                f"**ðŸŽ¥ Video:** `{file_name}`\n\n"
+                f"**â¬‡ï¸ Direct Download Link:**\n`{direct_link}`"
+            )
+            rm = InlineKeyboardMarkup([[InlineKeyboardButton("â¬‡ï¸ Download Now", url=direct_link)]])
+            await message.reply_text(text=response_message, reply_markup=rm, parse_mode=enums.ParseMode.MARKDOWN)
+            
+        else:
+            # For other video files (like .mp4), give both links
+            params = {'u': message.from_user.id, 'w': str(log_msg.id), 's': str(0), 't': str(0)}
+            url1 = f"{urlencode(params)}"
+            link = await encode(url1)
+            encoded_url = f"{LINK_URL}?Tech_VJ={link}"
+            
+            direct_stream_url = await get_stream_url(client, log_msg.id)
+            
+            response_message = (
+                f"**ðŸŽ¥ Video:** `{file_name}`\n\n"
+                f"**ðŸŒ Website Player URL:**\n`{encoded_url}`\n\n"
+                f"**ðŸ”— Direct Stream URL:**\n`{direct_stream_url}`"
+            )
+            rm = InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ–‡ï¸ Open Link", url=encoded_url)]])
+            await message.reply_text(text=response_message, reply_markup=rm, parse_mode=enums.ParseMode.MARKDOWN)
+
+    else:
+        # Handling for other file types (non-video)
+        direct_link = await get_stream_url(client, log_msg.id)
+        response_message = (
+            f"**ðŸ“„ File:** `{file_name}`\n\n"
+            f"**â¬‡ï¸ Direct Download Link:**\n`{direct_link}`"
+        )
+        rm = InlineKeyboardMarkup([[InlineKeyboardButton("â¬‡ï¸ Download Now", url=direct_link)]])
+        await message.reply_text(text=response_message, reply_markup=rm, parse_mode=enums.ParseMode.MARKDOWN)
 
 @Client.on_message(filters.private & filters.command("quality"))
 async def quality_link(client, message):
@@ -186,18 +239,58 @@ async def quality_link(client, message):
         params = {'u': message.from_user.id, 'w': first_id, 's': second_id, 't': third_id}
         url1 = f"{urlencode(params)}"
         link = await encode(url1)
+        
         encoded_url = f"{LINK_URL}?Tech_VJ={link}"
-        rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖇️ Open Link", url=encoded_url)]])
-        return await message.reply_text(text=f"<code>{encoded_url}</code>", reply_markup=rm)
+        
+        # Get Direct Stream URLs for all qualities
+        first_stream_url = await get_stream_url(client, int(first_id)) if first_id != "0" else ""
+        second_stream_url = await get_stream_url(client, int(second_id)) if second_id != "0" else ""
+        third_stream_url = await get_stream_url(client, int(third_id)) if third_id != "0" else ""
+        
+        # Get video title from the first uploaded file
+        video_title = get_name(await client.get_messages(LOG_CHANNEL, int(first_id)))
+        
+        # Build the response message
+        response_message = f"**ðŸŽ¥ Video:** `{video_title}`\n\n"
+        response_message += f"**ðŸŒ Website Player URL:**\n`{encoded_url}`\n\n"
+        if first_stream_url:
+            response_message += f"**ðŸ”— 480p Direct URL:**\n`{first_stream_url}`\n\n"
+        if second_stream_url:
+            response_message += f"**ðŸ”— 720p Direct URL:**\n`{second_stream_url}`\n\n"
+        if third_stream_url:
+            response_message += f"**ðŸ”— 1080p Direct URL:**\n`{third_stream_url}`\n\n"
+        
+        rm=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ–‡ï¸ Open Link", url=encoded_url)]])
+        return await message.reply_text(text=response_message, reply_markup=rm, parse_mode=enums.ParseMode.MARKDOWN)
     else:
         return await message.reply("Choose Quality From Above Three Quality Only. Send /quality commamd again to start creating link.")
 
     params = {'u': message.from_user.id, 'w': first_id, 's': second_id, 't': third_id}
     url1 = f"{urlencode(params)}"
     link = await encode(url1)
+    
     encoded_url = f"{LINK_URL}?Tech_VJ={link}"
-    rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖇️ Open Link", url=encoded_url)]])
-    await message.reply_text(text=f"<code>{encoded_url}</code>", reply_markup=rm)
+    
+    # Get Direct Stream URLs for all qualities
+    first_stream_url = await get_stream_url(client, int(first_id)) if first_id != "0" else ""
+    second_stream_url = await get_stream_url(client, int(second_id)) if second_id != "0" else ""
+    third_stream_url = await get_stream_url(client, int(third_id)) if third_id != "0" else ""
+    
+    # Get video title from the first uploaded file
+    video_title = get_name(await client.get_messages(LOG_CHANNEL, int(first_id)))
+        
+    # Build the response message
+    response_message = f"**ðŸŽ¥ Video:** `{video_title}`\n\n"
+    response_message += f"**ðŸŒ Website Player URL:**\n`{encoded_url}`\n\n"
+    if first_stream_url:
+        response_message += f"**ðŸ”— 480p Direct URL:**\n`{first_stream_url}`\n\n"
+    if second_stream_url:
+        response_message += f"**ðŸ”— 720p Direct URL:**\n`{second_stream_url}`\n\n"
+    if third_stream_url:
+        response_message += f"**ðŸ”— 1080p Direct URL:**\n`{third_stream_url}`\n\n"
+    
+    rm=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ–‡ï¸ Open Link", url=encoded_url)]])
+    await message.reply_text(text=response_message, reply_markup=rm, parse_mode=enums.ParseMode.MARKDOWN)
 
 @Client.on_message(filters.private & filters.text & ~filters.command(["account", "withdraw", "notify", "quality", "start", "update"]))
 async def link_start(client, message):
@@ -214,7 +307,7 @@ async def link_start(client, message):
         return await message.reply("**Link Invalid**")
     user_id = user_id.replace("&w", "")
     if user_id == message.from_user.id:
-        rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖇️ Open Link", url=message.text)]])
+        rm=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ–‡ï¸ Open Link", url=message.text)]])
         return await message.reply_text(text=f"<code>{message.text}</code>", reply_markup=rm)
     id = id.replace("&s", "")
     sec = sec.replace("&t", "")
@@ -222,7 +315,7 @@ async def link_start(client, message):
     url1 = f"{urlencode(params)}"
     link = await encode(url1)
     encoded_url = f"{LINK_URL}?Tech_VJ={link}"
-    rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖇️ Open Link", url=encoded_url)]])
+    rm=InlineKeyboardMarkup([[InlineKeyboardButton("ðŸ–‡ï¸ Open Link", url=encoded_url)]])
     await message.reply_text(text=f"<code>{encoded_url}</code>", reply_markup=rm)
 
 @Client.on_message(filters.private & filters.command("account"))
@@ -234,7 +327,7 @@ async def show_account(client, message):
         formatted_balance = f"{balance:.2f}"  # Format to 2 decimal places
         response = f"<b>Your Api Key :- <code>{message.from_user.id}</code>\n\nVideo Plays :- {link_clicks} ( Delay To Show Data )\n\nBalance :- ${formatted_balance}</b>"
     else:
-        response = f"<b>Your Api Key :- <code>{message.from_user.id}</code>\nVideo Plays :- 0 ( Delay To Show Data )\nBalance :- $0</b>" 
+        response = f"<b>Your Api Key :- <code>{message.from_user.id}</code>\nVideo Plays :- 0 ( Delay To Show Data )\nBalance :- $0</b>"  
     await message.reply(response)
 
 @Client.on_message(filters.private & filters.command("withdraw"))
@@ -248,13 +341,13 @@ async def show_withdraw(client, message):
     if link_clicks >= 1000:
         confirm = await client.ask(message.from_user.id, "You Are Going To Withdraw All Your Link Clicks. Are You Sure You Want To Withdraw ?\nSend /yes or /no")
         if confirm.text == "/no":
-            return await message.reply("**Withdraw Cancelled By You ❌**")
+            return await message.reply("**Withdraw Cancelled By You âŒ**")
         else:
             pay = await client.ask(message.from_user.id, "Now Choose Your Payment Method, Click On In Which You Want Your Withdrawal.\n\n/upi - for upi, webmoney, airtm, capitalist\n\n/bank - for bank only")
             if pay.text == "/upi":
                 upi = await client.ask(message.from_user.id, "Now Send Me Your Upi Or Upi Number With Your Name, Make Sure Name Matches With Your Upi Account")
                 if not upi.text:
-                    return await message.reply("**Wrong Input ❌**")
+                    return await message.reply("**Wrong Input âŒ**")
                 upi = f"Upi - {pay.text}"
                 try:
                     upi.delete()
@@ -263,16 +356,16 @@ async def show_withdraw(client, message):
             else:
                 name = await client.ask(message.from_user.id, "Now Send Me Your Account Holder Full Name")
                 if not name.text:
-                    return await message.reply("**Wrong Input ❌**")
+                    return await message.reply("**Wrong Input âŒ**")
                 number = await client.ask(message.from_user.id, "Now Send Me Your Account Number")
                 if not int(number.text):
-                    return await message.reply("**Wrong Input ❌**")
+                    return await message.reply("**Wrong Input âŒ**")
                 ifsc = await client.ask(message.from_user.id, "Now Send Me Your IFSC Code.")
                 if not ifsc.text:
-                    return await message.reply("**Wrong Input ❌**")
+                    return await message.reply("**Wrong Input âŒ**")
                 bank_name = await client.ask(message.from_user.id, "Now Send You Can Send Necessary Thing In One Message, Like Send Bank Name, Or Contact Details.")
                 if not bank_name.text:
-                    return await message.reply("**Wrong Input ❌**")
+                    return await message.reply("**Wrong Input âŒ**")
                 upi = f"Account Holder Name - {name.text}/n/nAccount Number - {number.text}/n/nIFSC Code - {ifsc.text}/n/nBank Name - {bank_name.text}\n\n"
                 try:
                     name.delete()
@@ -283,7 +376,7 @@ async def show_withdraw(client, message):
                     pass
             traffic = await client.ask(message.from_user.id, "Now Send Me Your Traffic Source Link, If Your Link Click Are Fake Then You Will Not Receive Payment And Withdrawal Get Cancelled")
             if not traffic.text:
-                return await message.reply("**Wrong Traffic Source ❌**")
+                return await message.reply("**Wrong Traffic Source âŒ**")
             balance = link_clicks / 1000.0  # Use floating-point division
             formatted_balance = f"{balance:.2f}"  # Format to 2 decimal places
             text = f"Api Key - {message.from_user.id}\n\n"
@@ -314,4 +407,3 @@ async def show_notify(client, message):
                 record_withdraw(user_id.text, False)
                 await client.send_message(user_id.text, f"Your Payment Cancelled - {reason.text}")
     await message.reply("Successfully Message Send.")
-    

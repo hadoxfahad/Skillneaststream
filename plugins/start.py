@@ -49,16 +49,8 @@ async def get_stream_url(client, message_id, use_telegram_cdn=False):
                 # For now, let's assume hash is crucial for your render.com endpoint
                 return None 
             
-            # Make sure LINK_URL is correctly defined in info.py and points to your website
-            # For the direct link, use the base URL for your streaming backend on Render.
-            # Example: if your backend is 'https://skill-neast.onrender.com', then use that.
-            # I'll use a placeholder `STREAM_SERVER_URL` for clarity.
-            # You NEED to define STREAM_SERVER_URL in your info.py if you use this.
-            # If your LINK_URL is already `https://skill-neast.onrender.com/` then fine.
-            
-            # Assuming 'skill-neast.onrender.com' is your actual streaming backend
-            # Make sure it can handle the /{message_id}/{quote_plus(file_name)}?hash={file_hash} format
-            return f"https://skill-neast.onrender.com/dl/{message_id}/{quote_plus(file_name)}?hash={file_hash}"
+            # --- FIX APPLIED HERE: Changed the base URL for direct streaming ---
+            return f"https://skillneaststream.onrender.com/dl/{message_id}/{quote_plus(file_name)}?hash={file_hash}"
             
     except Exception as e:
         print(f"Error in get_stream_url for message_id {message_id}: {e}")

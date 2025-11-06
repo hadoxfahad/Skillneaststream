@@ -43,12 +43,13 @@ def get_file_hash_robust(message):
     return None
 
 # Ek naya function jo direct stream URL banayega
-async def get_stream_url(client, message_id, use_telegram_cdn=False):
+async def get_stream_url(client, message_id, file_name_override=None, use_telegram_cdn=False):
     """
     Generates a direct stream/download URL for a file.
     
     :param client: The Pyrogram client instance.
     :param message_id: The message ID of the file in the LOG_CHANNEL.
+    :param file_name_override: Optional. A filename to use instead of trying to extract from message.
     :param use_telegram_cdn: If True, uses Telegram's built-in get_file_link.
                              If False (default), uses the custom render.com domain.
     """
@@ -61,19 +62,17 @@ async def get_stream_url(client, message_id, use_telegram_cdn=False):
             return str(direct_file_link)
         else:
             # Use your custom render.com domain and custom hash/name logic
-            # Using robust functions for name and hash
-            file_name = get_file_name_robust(msg) 
+            file_name = file_name_override if file_name_override else get_file_name_robust(msg) 
             file_hash = get_file_hash_robust(msg) 
             
             # Critical check: if get_name or get_hash fail, we can't build the URL
             if not file_name:
-                print(f"DEBUG: get_file_name_robust returned None for message_id {message_id}")
+                print(f"DEBUG: get_file_name_robust returned None for message_id {message_id} and no override provided.")
                 return None
             if not file_hash:
                 print(f"DEBUG: get_file_hash_robust returned None for message_id {message_id}")
                 return None 
             
-            # --- FIX APPLIED HERE: Changed the base URL for direct streaming ---
             # Using quote_plus for file_name to handle special characters correctly in URL
             return f"https://skillneaststream.onrender.com/dl/{message_id}/{quote_plus(file_name)}?hash={file_hash}"
             
@@ -170,9 +169,14 @@ async def universal_handler(client, message):
 
     # Use the robust get_file_name_robust function
     file_name = get_file_name_robust(log_msg)
+    
+    # If file_name is still None, ask the user for a filename
     if not file_name:
-        print(f"ERROR: get_file_name_robust returned None for log_msg ID: {log_msg.id}. Media type: {file_type}")
-        return await message.reply("Sorry, I couldn't get the name of this file. Ensure it has a recognizable filename like 'MyMovie.mp4'. Files with generic names like '5_123.mp4' might not work.")
+        ask_name_msg = await client.ask(message.chat.id, "Sorry, I couldn't automatically get the name of this file. Please send me the name you want to use for this file (e.g., `MyMovie.mp4`):")
+        if ask_name_msg.text:
+            file_name = ask_name_msg.text
+        else:
+            return await message.reply("You did not provide a filename. Process cancelled.")
 
     is_video = file_type == 'video' or (file_type == 'document' and file.mime_type and file.mime_type.startswith('video/'))
     
@@ -185,7 +189,7 @@ async def universal_handler(client, message):
         
         if is_ts_file:
             # For .ts files, only provide a direct download link using your custom server
-            direct_link = await get_stream_url(client, log_msg.id, use_telegram_cdn=False) # Use custom server
+            direct_link = await get_stream_url(client, log_msg.id, file_name_override=file_name, use_telegram_cdn=False) # Use custom server, pass provided name
             if not direct_link:
                 return await message.reply(f"Error generating direct link for TS file `{file_name}`. Please try again.")
             
@@ -202,7 +206,7 @@ async def universal_handler(client, message):
             link_encoded_base64 = await encode(url_params_encoded)
             website_url = f"{LINK_URL}?Tech_VJ={link_encoded_base64}"
             
-            direct_stream_url = await get_stream_url(client, log_msg.id, use_telegram_cdn=False) # Use custom server
+            direct_stream_url = await get_stream_url(client, log_msg.id, file_name_override=file_name, use_telegram_cdn=False) # Use custom server, pass provided name
             if not direct_stream_url:
                 direct_stream_url = "Could not generate direct stream URL. Please try again."
             
@@ -214,7 +218,7 @@ async def universal_handler(client, message):
             rm = InlineKeyboardMarkup([[InlineKeyboardButton("🖥️ Open Link", url=website_url)]])
 
     else: # Handle photo, audio, other documents
-        direct_link = await get_stream_url(client, log_msg.id, use_telegram_cdn=False) # Use custom server
+        direct_link = await get_stream_url(client, log_msg.id, file_name_override=file_name, use_telegram_cdn=False) # Use custom server, pass provided name
         if not direct_link:
             return await message.reply(f"Error generating direct download link for `{file_name}`. Please try again.")
             
@@ -239,21 +243,34 @@ async def quality_link(client, message):
     second_id = str(0)
     third_id = str(0)
     
+    # Store filenames temporarily for quality links
+    filenames_for_qualities = {}
+
     # Helper to get file and store in log channel
-    async def get_and_store_file(prompt_text):
+    async def get_and_store_file(prompt_text, quality_tag):
         file_msg = await client.ask(message.from_user.id, prompt_text)
         if file_msg.video or file_msg.document:
             file = getattr(file_msg, file_msg.media.value)
             fileid = file.file_id
             log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=fileid)
-            # Check if log_msg is valid and has a name
-            if log_msg and get_file_name_robust(log_msg):
-                return str(log_msg.id)
+            
+            file_name = get_file_name_robust(log_msg)
+            if not file_name:
+                ask_name_msg = await client.ask(message.chat.id, f"Sorry, I couldn't automatically get the name for the {quality_tag} file. Please send me the name you want to use (e.g., `MyMovie-{quality_tag}.mp4`):")
+                if ask_name_msg.text:
+                    file_name = ask_name_msg.text
+                else:
+                    await file_msg.reply("You did not provide a filename. Process cancelled for this quality.")
+                    return None, None # Indicate failure
+            
+            if log_msg:
+                filenames_for_qualities[quality_tag] = file_name
+                return str(log_msg.id), file_name
             else:
-                await file_msg.reply("Sorry, I couldn't get the name of this file. Ensure it has a recognizable filename.")
-                return None # Indicate failure
+                await file_msg.reply("Failed to store file in log channel. Try again.")
+                return None, None
         else:
-            return None # Indicate failure
+            return None, None # Indicate failure
             
     # Ask for first quality
     first_q_text = await client.ask(message.from_user.id, "<b>Now Send Me Your Quality In Which You Upload File. Only Below These Qualities Are Available Only.\n\n1. If your file quality is less than or equal to 480p then send <code>480</code>\n2. If your file quality is greater than 480p and less than or equal to 720p then send <code>720</code>\n3. If your file quality is greater than 720p then send <code>1080</code></b>")
@@ -263,7 +280,7 @@ async def quality_link(client, message):
     if first_q_text.text in ["480", "720", "1080"]:
         current_qualities.append(first_q_text.text)
         prompt = f"Now Send Me Your {first_q_text.text}p Quality File."
-        file_id_str = await get_and_store_file(prompt)
+        file_id_str, fname = await get_and_store_file(prompt, first_q_text.text + "p")
         if not file_id_str:
             return await message.reply("Wrong Input or file name issue, Start Process Again By /quality")
         if first_q_text.text == "480": first_id = file_id_str
@@ -278,7 +295,7 @@ async def quality_link(client, message):
     if second_q_text.text in ["480", "720", "1080"] and second_q_text.text not in current_qualities:
         current_qualities.append(second_q_text.text)
         prompt = f"Now Send Me Your {second_q_text.text}p Quality File."
-        file_id_str = await get_and_store_file(prompt)
+        file_id_str, fname = await get_and_store_file(prompt, second_q_text.text + "p")
         if not file_id_str:
             return await message.reply("Wrong Input or file name issue, Start Process Again By /quality")
         if second_q_text.text == "480": first_id = file_id_str
@@ -296,7 +313,7 @@ async def quality_link(client, message):
     elif third_q_text.text in ["480", "720", "1080"] and third_q_text.text not in current_qualities:
         current_qualities.append(third_q_text.text)
         prompt = f"Now Send Me Your {third_q_text.text}p Quality File."
-        file_id_str = await get_and_store_file(prompt)
+        file_id_str, fname = await get_and_store_file(prompt, third_q_text.text + "p")
         if not file_id_str:
             return await message.reply("Wrong Input or file name issue, Start Process Again By /quality")
         if third_q_text.text == "480": first_id = file_id_str
@@ -313,38 +330,32 @@ async def quality_link(client, message):
     
     response_message_parts = [f"**🎥 Video Quality Links:**\n\n**🌐 Website Player URL:**\n`{encoded_url}`\n\n"]
     
-    # Get file name for title from the first available quality using robust function
+    # Get file name for title from the first available quality (using stored filenames)
     video_title = "Unknown Video"
-    try:
-        if first_id != "0":
-            msg = await client.get_messages(LOG_CHANNEL, int(first_id))
-            video_title = get_file_name_robust(msg) if msg else "Unknown Video"
-        elif second_id != "0":
-            msg = await client.get_messages(LOG_CHANNEL, int(second_id))
-            video_title = get_file_name_robust(msg) if msg else "Unknown Video"
-        elif third_id != "0":
-            msg = await client.get_messages(LOG_CHANNEL, int(third_id))
-            video_title = get_file_name_robust(msg) if msg else "Unknown Video"
-        if not video_title: # If get_file_name_robust still returns None
-             video_title = "Unknown Video"
-    except Exception as e:
-        print(f"ERROR: Could not get video title for quality links: {e}")
-        video_title = "Unknown Video"
+    if "480p" in filenames_for_qualities:
+        video_title = filenames_for_qualities["480p"]
+    elif "720p" in filenames_for_qualities:
+        video_title = filenames_for_qualities["720p"]
+    elif "1080p" in filenames_for_qualities:
+        video_title = filenames_for_qualities["1080p"]
         
     response_message_parts.insert(0, f"**🎥 Video:** `{video_title}`\n\n")
 
     if first_id != "0":
-        first_stream_url = await get_stream_url(client, int(first_id), use_telegram_cdn=False)
+        fname = filenames_for_qualities.get("480p")
+        first_stream_url = await get_stream_url(client, int(first_id), file_name_override=fname, use_telegram_cdn=False)
         if first_stream_url: response_message_parts.append(f"**🔗 480p Direct URL:**\n`{first_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 480p Direct URL:** (Failed to generate)\n\n")
 
     if second_id != "0":
-        second_stream_url = await get_stream_url(client, int(second_id), use_telegram_cdn=False)
+        fname = filenames_for_qualities.get("720p")
+        second_stream_url = await get_stream_url(client, int(second_id), file_name_override=fname, use_telegram_cdn=False)
         if second_stream_url: response_message_parts.append(f"**🔗 720p Direct URL:**\n`{second_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 720p Direct URL:** (Failed to generate)\n\n")
 
     if third_id != "0":
-        third_stream_url = await get_stream_url(client, int(third_id), use_telegram_cdn=False)
+        fname = filenames_for_qualities.get("1080p")
+        third_stream_url = await get_stream_url(client, int(third_id), file_name_override=fname, use_telegram_cdn=False)
         if third_stream_url: response_message_parts.append(f"**🔗 1080p Direct URL:**\n`{third_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 1080p Direct URL:** (Failed to generate)\n\n")
     
@@ -395,36 +406,46 @@ async def link_start(client, message):
     # Generate direct stream URLs for all available qualities
     response_message_parts = [f"**🎥 Video Links from Shared Link:**\n\n**🌐 Website Player URL:**\n`{encoded_url}`\n\n"]
 
-    # Attempt to get file name for title using robust function
+    # Attempt to get file name for title using robust function, if not found, use a generic one
     video_title = "Unknown Video"
+    primary_file_name_for_stream = None # To pass to get_stream_url
     try:
         if log_msg_id != "0":
             msg = await client.get_messages(LOG_CHANNEL, int(log_msg_id))
             video_title = get_file_name_robust(msg) if msg else "Unknown Video"
+            primary_file_name_for_stream = video_title if video_title != "Unknown Video" else None
         elif s_id != "0":
             msg = await client.get_messages(LOG_CHANNEL, int(s_id))
             video_title = get_file_name_robust(msg) if msg else "Unknown Video"
+            primary_file_name_for_stream = video_title if video_title != "Unknown Video" else None
         elif t_id != "0":
             msg = await client.get_messages(LOG_CHANNEL, int(t_id))
             video_title = get_file_name_robust(msg) if msg else "Unknown Video"
-        if not video_title:
-            video_title = "Unknown Video"
+            primary_file_name_for_stream = video_title if video_title != "Unknown Video" else None
     except Exception as e:
         print(f"ERROR: Could not get video title for shared link: {e}")
+        video_title = "Unknown Video"
     response_message_parts.insert(0, f"**🎥 Video:** `{video_title}`\n\n")
 
     if log_msg_id != "0": # Primary quality (usually 480p or default)
-        direct_stream_url = await get_stream_url(client, int(log_msg_id), use_telegram_cdn=False)
+        # Attempt to get file name for this specific quality
+        current_msg = await client.get_messages(LOG_CHANNEL, int(log_msg_id))
+        current_file_name = get_file_name_robust(current_msg) if current_msg else None
+        direct_stream_url = await get_stream_url(client, int(log_msg_id), file_name_override=current_file_name, use_telegram_cdn=False)
         if direct_stream_url: response_message_parts.append(f"**🔗 Primary Direct URL:**\n`{direct_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 Primary Direct URL:** (Failed to generate)\n\n")
 
     if s_id != "0": # Secondary quality (e.g., 720p)
-        direct_stream_url = await get_stream_url(client, int(s_id), use_telegram_cdn=False)
+        current_msg = await client.get_messages(LOG_CHANNEL, int(s_id))
+        current_file_name = get_file_name_robust(current_msg) if current_msg else None
+        direct_stream_url = await get_stream_url(client, int(s_id), file_name_override=current_file_name, use_telegram_cdn=False)
         if direct_stream_url: response_message_parts.append(f"**🔗 Secondary Direct URL:**\n`{direct_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 Secondary Direct URL:** (Failed to generate)\n\n")
         
     if t_id != "0": # Tertiary quality (e.g., 1080p)
-        direct_stream_url = await get_stream_url(client, int(t_id), use_telegram_cdn=False)
+        current_msg = await client.get_messages(LOG_CHANNEL, int(t_id))
+        current_file_name = get_file_name_robust(current_msg) if current_msg else None
+        direct_stream_url = await get_stream_url(client, int(t_id), file_name_override=current_file_name, use_telegram_cdn=False)
         if direct_stream_url: response_message_parts.append(f"**🔗 Tertiary Direct URL:**\n`{direct_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 Tertiary Direct URL:** (Failed to generate)\n\n")
 

@@ -1,7 +1,3 @@
-# Don't Remove Credit @VJ_Botz
-# Subscribe YouTube Channel For Amazing Bot @Tech_VJ
-# Ask Doubt on telegram @KingVJ01
-
 import random
 import requests
 import humanize
@@ -9,15 +5,17 @@ import base64
 import binascii
 from Script import script
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, CallbackQuery
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, CallbackQuery, InputMediaVideo, InputMediaDocument, InputMediaPhoto, InputMediaAudio
 from info import LOG_CHANNEL, LINK_URL, ADMIN
 from plugins.database import checkdb, db, get_count, get_withdraw, record_withdraw, record_visit
 from urllib.parse import quote_plus, urlencode
-# Make sure TechVJ.util is correctly installed/accessible
-# from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size # REMOVING THIS IMPORT
-from TechVJ.util.human_readable import humanbytes
+
+# Assuming TechVJ.util is correctly installed/accessible
+# from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size 
+# from TechVJ.util.human_readable import humanbytes
 
 # --- NEW HELPER FUNCTION FOR FILE NAME ---
+
 def get_file_name_from_message(message):
     """
     Extracts filename from a Pyrogram Message object,
@@ -26,27 +24,25 @@ def get_file_name_from_message(message):
     if message.video:
         return message.video.file_name or f"video_{message.video.file_unique_id}.mp4"
     elif message.document:
-        # Check for mime_type to guess extension if not in file_name
         name = message.document.file_name
         if not name:
             if message.document.mime_type:
                 ext = message.document.mime_type.split('/')[-1]
                 return f"document_{message.document.file_unique_id}.{ext}"
-            return f"document_{message.document.file_unique_id}" # No extension guess
-        # Ensure it has an extension if it looks like a file ID
+            return f"document_{message.document.file_unique_id}"
         if '.' not in name and message.document.mime_type:
             ext = message.document.mime_type.split('/')[-1]
-            if ext in ["mp4", "mkv", "webm", "avi", "mov", "flv", "wmv", "ts", "mpeg"]: # Common video extensions
+            if ext in ["mp4", "mkv", "webm", "avi", "mov", "flv", "wmv", "ts", "mpeg"]:
                 name += f".{ext}"
         return name
     elif message.audio:
         return message.audio.file_name or f"audio_{message.audio.file_unique_id}.mp3"
     elif message.photo:
-        # Photos typically don't have a filename, so generate a generic one
         return f"photo_{message.photo.file_unique_id}.jpg"
-    return None # No media with recognizable name
+    return None
 
 # --- NEW HELPER FUNCTION FOR FILE HASH (IF NEEDED, CURRENTLY UNUSED IN YOUR STREAM URL) ---
+
 def get_file_hash_from_message(message):
     """
     Extracts file hash from a Pyrogram Message object if available.
@@ -63,12 +59,12 @@ def get_file_hash_from_message(message):
         return message.photo.file_unique_id
     return "unknown_hash" # Fallback hash
 
-
 # Ek naya function jo direct stream URL banayega
+
 async def get_stream_url(client, message_id, use_telegram_cdn=False):
     """
     Generates a direct stream/download URL for a file.
-    
+
     :param client: The Pyrogram client instance.
     :param message_id: The message ID of the file in the LOG_CHANNEL.
     :param use_telegram_cdn: If True, uses Telegram's built-in get_file_link.
@@ -78,23 +74,16 @@ async def get_stream_url(client, message_id, use_telegram_cdn=False):
         msg = await client.get_messages(LOG_CHANNEL, message_id)
         
         if use_telegram_cdn:
-            # Use Pyrogram's built-in method for Telegram CDN links
             direct_file_link = await client.get_file_link(msg)
             return str(direct_file_link)
         else:
-            # Use your custom render.com domain and custom hash/name logic
-            # Using the new robust function for filename
             file_name = get_file_name_from_message(msg) 
-            file_hash = get_file_hash_from_message(msg) # Using new hash function
+            file_hash = get_file_hash_from_message(msg) 
             
-            # Critical check: if get_name fails, we can't build the URL
             if not file_name:
                 print(f"DEBUG: get_file_name_from_message returned None for message_id {message_id}")
                 return None
             
-            # --- FIX APPLIED HERE: Changed the base URL for direct streaming ---
-            # Using file_hash as a parameter, ensure your render.com endpoint expects it.
-            # If your render.com endpoint doesn't use 'hash', you can remove `?hash={file_hash}`
             return f"https://skillneaststream.onrender.com/dl/{message_id}/{quote_plus(file_name)}?hash={file_hash}"
             
     except Exception as e:
@@ -115,9 +104,8 @@ async def decode(base64_string):
         string = string_bytes.decode("ascii")
         return string
     except (binascii.Error, TypeError):
-        print(f"DEBUG: Decode failed for '{base64_string}'") # Added debug
+        print(f"DEBUG: Decode failed for '{base64_string}'")
         return None
-
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start(client, message):
@@ -164,55 +152,69 @@ async def update(client, message):
         return await message.reply("<b>Update Successfully.</b>")
 
 # ----------------- REVISED universal_handler -----------------
+
 @Client.on_message(filters.private & (filters.document | filters.video | filters.photo | filters.audio))
 async def universal_handler(client, message):
     if not message.media:
         return await message.reply("Please send a file (video, document, audio, etc.).")
 
-    # Get the file object based on its media type
     file = getattr(message, message.media.value)
     file_type = message.media.value
     fileid = file.file_id
-    
+
     print(f"DEBUG: Processing file with ID: {fileid} and type: {file_type}")
 
     log_msg = None
     try:
-        # Send original media (not cached_media) to get full metadata in log_channel
-        # Pyrogram's send_cached_media might strip some metadata or file_name if not directly passed
-        # Using send_message with file_id and message.media.value ensures full metadata
-        log_msg = await client.send_message(chat_id=LOG_CHANNEL, 
-                                            text="Incoming File", # Optional text
-                                            media=message.media, # Use the original media type
-                                            file_id=fileid) # Pass the file_id directly
+        # Determine the correct InputMedia object based on file_type
+        if file_type == 'video':
+            input_media = InputMediaVideo(file_id=fileid)
+        elif file_type == 'document':
+            input_media = InputMediaDocument(file_id=fileid)
+        elif file_type == 'photo':
+            # Photos usually don't have file_name, but log channel can store them
+            input_media = InputMediaPhoto(file_id=fileid)
+        elif file_type == 'audio':
+            input_media = InputMediaAudio(file_id=fileid)
+        else:
+            print(f"ERROR: Unknown media type: {file_type}")
+            return await message.reply("Sorry, I don't support this file type for logging.")
+
+        log_msg = await client.send_cached_media(
+            chat_id=LOG_CHANNEL, 
+            file_id=fileid, # Pass file_id directly
+            caption=f"Incoming File from {message.from_user.id}" # Optional caption for clarity in log channel
+        )
         print(f"DEBUG: File sent to LOG_CHANNEL. Message ID: {log_msg.id}")
+
     except Exception as e:
         print(f"ERROR: Failed to send media to LOG_CHANNEL: {e}")
-        return await message.reply("Sorry, I could not save the file to the log channel. Please check bot permissions and try again.")
+        # Log the full exception for better debugging
+        import traceback
+        traceback.print_exc()
+        return await message.reply("Sorry, main file ko log channel mein save nahin kar paya. Please check bot permissions (Make sure bot is admin in log channel with 'Post Messages' permission) and try again.")
 
     if not log_msg:
-        print("ERROR: log_msg is None after send_message.")
-        return await message.reply("Failed to get log message details.")
+        print("ERROR: log_msg is None after send_cached_media.")
+        return await message.reply("Failed to get log message details after sending.")
 
     # Using the robust get_file_name_from_message function
     file_name = get_file_name_from_message(log_msg)
-    
+
     if not file_name:
         print(f"ERROR: Could not determine file name for log_msg ID: {log_msg.id}. Media type: {file_type}")
-        return await message.reply("Sorry, I couldn't get the name of this file. Ensure it has a recognizable filename (like .mp4).")
+        return await message.reply("Sorry, main is file ka naam nahin nikal paya. Please ensure iska koi recognizable filename hai (jaise .mp4).")
 
     is_video = file_type == 'video' or (file_type == 'document' and file.mime_type and file.mime_type.startswith('video/'))
-    
+
     response_message = ""
     rm = None
 
     if is_video:
-        # Check if it's a .ts file or a general video
         is_ts_file = file_name.lower().endswith('.ts')
         
         if is_ts_file:
-            # For .ts files, only provide a direct download link using your custom server
-            direct_link = await get_stream_url(client, log_msg.id, use_telegram_cdn=False) # Use custom server
+            direct_link = await get_stream_url(client, log_msg.id, use_telegram_cdn=False)
             if not direct_link:
                 return await message.reply(f"Error generating direct link for TS file `{file_name}`.")
             
@@ -223,13 +225,12 @@ async def universal_handler(client, message):
             rm = InlineKeyboardMarkup([[InlineKeyboardButton("⬇️ Download Now", url=direct_link)]])
             
         else:
-            # For general videos, provide both website player and direct stream URL
             params = {'u': message.from_user.id, 'w': str(log_msg.id), 's': str(0), 't': str(0)}
             url_params_encoded = urlencode(params)
             link_encoded_base64 = await encode(url_params_encoded)
             website_url = f"{LINK_URL}?Tech_VJ={link_encoded_base64}"
             
-            direct_stream_url = await get_stream_url(client, log_msg.id, use_telegram_cdn=False) # Use custom server
+            direct_stream_url = await get_stream_url(client, log_msg.id, use_telegram_cdn=False)
             if not direct_stream_url:
                 direct_stream_url = "Could not generate direct stream URL."
             
@@ -241,7 +242,7 @@ async def universal_handler(client, message):
             rm = InlineKeyboardMarkup([[InlineKeyboardButton("🖥️ Open Link", url=website_url)]])
 
     else: # Handle photo, audio, other documents
-        direct_link = await get_stream_url(client, log_msg.id, use_telegram_cdn=False) # Use custom server
+        direct_link = await get_stream_url(client, log_msg.id, use_telegram_cdn=False)
         if not direct_link:
             return await message.reply(f"Error generating direct download link for `{file_name}`.")
             
@@ -255,34 +256,42 @@ async def universal_handler(client, message):
         text=response_message,
         reply_markup=rm,
         parse_mode=enums.ParseMode.MARKDOWN,
-        disable_web_page_preview=True # Prevent Telegram from trying to render previews
+        disable_web_page_preview=True
     )
 # ----------------- REVISED END -----------------
-
 
 @Client.on_message(filters.private & filters.command("quality"))
 async def quality_link(client, message):
     first_id = str(0)
     second_id = str(0)
     third_id = str(0)
-    
+
     # Helper to get file and store in log channel
     async def get_and_store_file(prompt_text):
         file_msg = await client.ask(message.from_user.id, prompt_text)
-        if file_msg.video or file_msg.document or file_msg.audio or file_msg.photo: # Added audio/photo for robustness
+        if file_msg.video or file_msg.document or file_msg.audio or file_msg.photo:
             file = getattr(file_msg, file_msg.media.value)
             fileid = file.file_id
-            log_msg = await client.send_message(chat_id=LOG_CHANNEL, 
-                                                text=f"Quality file from {message.from_user.id}", 
-                                                media=file_msg.media, 
-                                                file_id=fileid) # Use send_message
-            return str(log_msg.id)
+            
+            try:
+                # Use send_cached_media for existing file_id
+                log_msg = await client.send_cached_media(
+                    chat_id=LOG_CHANNEL, 
+                    file_id=fileid, 
+                    caption=f"Quality file from {message.from_user.id}"
+                )
+                return str(log_msg.id)
+            except Exception as e:
+                print(f"Error sending quality file to LOG_CHANNEL: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
         else:
             return None # Indicate failure
             
     # Ask for first quality
     first_q_text = await client.ask(message.from_user.id, "<b>Now Send Me Your Quality In Which You Upload File. Only Below These Qualities Are Available Only.\n\n1. If your file quality is less than or equal to 480p then send <code>480</code>\n2. If your file quality is greater than 480p and less than or equal to 720p then send <code>720</code>\n3. If your file quality is greater than 720p then send <code>1080</code></b>")
-    
+
     current_qualities = [] # To keep track of chosen qualities
 
     if first_q_text.text in ["480", "720", "1080"]:
@@ -310,14 +319,12 @@ async def quality_link(client, message):
         elif second_q_text.text == "720": second_id = file_id_str
         elif second_q_text.text == "1080": third_id = file_id_str
     else:
-        # If user skips or gives bad input for second quality, we can continue with only one quality
         pass # Will fall through to link generation below, handling only the first_id
         
     # Ask for third quality or /getlink
     third_q_text = await client.ask(message.from_user.id, "<b>Now Send Me Your **Another** Quality In Which You Upload File. Only Below These Qualities Are Available Only.\n\n1. If your file quality is less than or equal to 480p then send <code>480</code>\n2. If your file quality is greater than 480p and less than or equal to 720p then send <code>720</code>\n3. If your file quality is greater than 720p then send <code>1080</code>\n\nNote Don not use one quality 2 or more time.\n\nIf you want only 2 quality option then use <code>/getlink</code> command for stream link.</b>")
-    
+
     if third_q_text.text == "/getlink":
-        # Process 2 qualities
         pass # Will fall through to link generation below
     elif third_q_text.text in ["480", "720", "1080"] and third_q_text.text not in current_qualities:
         current_qualities.append(third_q_text.text)
@@ -329,29 +336,27 @@ async def quality_link(client, message):
         elif third_q_text.text == "720": second_id = file_id_str
         elif third_q_text.text == "1080": third_id = file_id_str
     else:
-        # If user skips or gives bad input for third quality, we continue with available qualities
         pass # Will fall through to link generation below, handling available qualities
 
     params = {'u': message.from_user.id, 'w': first_id, 's': second_id, 't': third_id}
     url_params_encoded = urlencode(params)
     link_encoded_base64 = await encode(url_params_encoded)
-    
+
     encoded_url = f"{LINK_URL}?Tech_VJ={link_encoded_base64}"
-    
+
     response_message_parts = [f"**🎥 Video Quality Links:**\n\n**🌐 Website Player URL:**\n`{encoded_url}`\n\n"]
-    
+
     # Get file name for title from the first available quality
     video_title = "Unknown Video"
     try:
-        # Use the new robust get_file_name_from_message
         if first_id != "0":
             video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(first_id)))
         elif second_id != "0":
             video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(second_id)))
         elif third_id != "0":
             video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(third_id)))
-        if not video_title: # If get_file_name_from_message still returns None (very unlikely now)
-             video_title = "Unknown Video"
+        if not video_title:
+            video_title = "Unknown Video"
     except Exception as e:
         print(f"ERROR: Could not get video title for quality links: {e}")
         video_title = "Unknown Video"
@@ -372,7 +377,7 @@ async def quality_link(client, message):
         third_stream_url = await get_stream_url(client, int(third_id), use_telegram_cdn=False)
         if third_stream_url: response_message_parts.append(f"**🔗 1080p Direct URL:**\n`{third_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 1080p Direct URL:** (Failed to generate)\n\n")
-    
+
     response_message = "".join(response_message_parts)
 
     rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖥️ Open Link", url=encoded_url)]])
@@ -383,14 +388,13 @@ async def link_start(client, message):
     if not message.text.startswith(LINK_URL):
         return
     link_part = message.text[len(LINK_URL + "?Tech_VJ="):].strip()
-    
+
     original = await decode(link_part)
-    
+
     if original is None:
         return await message.reply("Link Invalid or Corrupted")
 
     try:
-        # Example original: u=123&w=456&s=0&t=0
         parts = original.split("&")
         data = {p.split("=")[0]: p.split("=")[1] for p in parts}
         
@@ -407,23 +411,18 @@ async def link_start(client, message):
         return await message.reply("Link Invalid or Corrupted. Failed to parse parameters.")
         
     if user_id_from_link == str(message.from_user.id):
-        # If the user is requesting their own link, just resend it
         rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖥️ Open Link", url=message.text)]])
         return await message.reply_text(text=f"<code>{message.text}</code>", reply_markup=rm, disable_web_page_preview=True)
-    
-    # Generate a new website URL with the requesting user's ID for tracking
+
     new_params = {'u': message.from_user.id, 'w': log_msg_id, 's': s_id, 't': t_id}
     new_url_params_encoded = urlencode(new_params)
     new_link_encoded_base64 = await encode(new_url_params_encoded)
     encoded_url = f"{LINK_URL}?Tech_VJ={new_link_encoded_base64}"
 
-    # Generate direct stream URLs for all available qualities
     response_message_parts = [f"**🎥 Video Links from Shared Link:**\n\n**🌐 Website Player URL:**\n`{encoded_url}`\n\n"]
 
-    # Attempt to get file name for title
     video_title = "Unknown Video"
     try:
-        # Using the new robust get_file_name_from_message
         if log_msg_id != "0":
             video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(log_msg_id)))
         elif s_id != "0":
@@ -436,17 +435,17 @@ async def link_start(client, message):
         print(f"ERROR: Could not get video title for shared link: {e}")
     response_message_parts.insert(0, f"**🎥 Video:** `{video_title}`\n\n")
 
-    if log_msg_id != "0": # Primary quality (usually 480p or default)
+    if log_msg_id != "0":
         direct_stream_url = await get_stream_url(client, int(log_msg_id), use_telegram_cdn=False)
         if direct_stream_url: response_message_parts.append(f"**🔗 Primary Direct URL:**\n`{direct_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 Primary Direct URL:** (Failed to generate)\n\n")
 
-    if s_id != "0": # Secondary quality (e.g., 720p)
+    if s_id != "0":
         direct_stream_url = await get_stream_url(client, int(s_id), use_telegram_cdn=False)
         if direct_stream_url: response_message_parts.append(f"**🔗 Secondary Direct URL:**\n`{direct_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 Secondary Direct URL:** (Failed to generate)\n\n")
         
-    if t_id != "0": # Tertiary quality (e.g., 1080p)
+    if t_id != "0":
         direct_stream_url = await get_stream_url(client, int(t_id), use_telegram_cdn=False)
         if direct_stream_url: response_message_parts.append(f"**🔗 Tertiary Direct URL:**\n`{direct_stream_url}`\n\n")
         else: response_message_parts.append(f"**🔗 Tertiary Direct URL:** (Failed to generate)\n\n")
@@ -455,7 +454,6 @@ async def link_start(client, message):
 
     rm=InlineKeyboardMarkup([[InlineKeyboardButton("🖥️ Open Link", url=encoded_url)]])
     await message.reply_text(text=response_message, reply_markup=rm, parse_mode=enums.ParseMode.MARKDOWN, disable_web_page_preview=True)
-
 
 @Client.on_message(filters.private & filters.command("account"))
 async def show_account(client, message):
@@ -482,7 +480,7 @@ async def show_withdraw(client, message):
             return await message.reply("Withdraw Cancelled by you ❌")
         else:
             pay = await client.ask(message.from_user.id, "Now Choose Your Payment Method, Click On In Which You Want Your Withdrawal.\n\n/upi - for upi, webmoney, airtm, capitalist\n\n/bank - for bank only")
-            upi_string = "" # Initialize outside the if/elif blocks
+            upi_string = ""
             if pay.text == "/upi":
                 upi_details = await client.ask(message.from_user.id, "Now Send Me Your Upi Or Upi Number With Your Name, Make Sure Name Matches With Your Upi Account")
                 if not upi_details.text:
@@ -501,7 +499,7 @@ async def show_withdraw(client, message):
                     if not int(number_msg.text):
                         return await message.reply("Wrong Input ❌")
                 except ValueError:
-                     return await message.reply("Wrong Input ❌")
+                    return await message.reply("Wrong Input ❌")
                 ifsc = await client.ask(message.from_user.id, "Now Send Me Your IFSC Code.")
                 if not ifsc.text:
                     return await message.reply("Wrong Input ❌")
@@ -523,7 +521,7 @@ async def show_withdraw(client, message):
                     pass
             else:
                 return await message.reply("Invalid payment method. Please use /upi or /bank.")
-            
+
             traffic = await client.ask(message.from_user.id, "Now Send Me Your Traffic Source Link, If Your Link Click Are Fake Then You Will Not Receive Payment And Withdrawal Get Cancelled")
             if not traffic.text:
                 return await message.reply("Wrong Traffic Source ❌")
@@ -534,7 +532,7 @@ async def show_withdraw(client, message):
                 f"Api Key - {message.from_user.id}\n\n"
                 f"Video Plays - {link_clicks}\n\n"
                 f"Balance - ${formatted_balance}\n\n"
-                f"{upi_string}" # Use the consolidated string
+                f"{upi_string}"
                 f"Traffic Link - {traffic.text}"
             )
             
@@ -555,13 +553,13 @@ async def show_notify(client, message):
 
     sub = await client.ask(message.from_user.id, "Payment Is Cancelled Or Send Successfully. /send or /cancel")
     if sub.text == "/send":
-        record_visits(user_id, count)
+        record_visit(user_id, count) # Changed to record_visit as per your database functions
         record_withdraw(user_id, False)
         await client.send_message(user_id, "Your Withdrawal Is Successfully Completed And Sended To Your Bank Account.")
     else:
         reason = await client.ask(message.from_user.id, "Send Me The Reason For Cancellation of Payment")
         if reason.text:
-            record_visits(user_id, count)
+            record_visit(user_id, count) # Changed to record_visit
             record_withdraw(user_id, False)
             await client.send_message(user_id, f"Your Payment Cancelled - {reason.text}")
     await message.reply("Successfully Message Send.")

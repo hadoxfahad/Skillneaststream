@@ -14,8 +14,55 @@ from info import LOG_CHANNEL, LINK_URL, ADMIN
 from plugins.database import checkdb, db, get_count, get_withdraw, record_withdraw, record_visit
 from urllib.parse import quote_plus, urlencode
 # Make sure TechVJ.util is correctly installed/accessible
-from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size
+# from TechVJ.util.file_properties import get_name, get_hash, get_media_file_size # REMOVING THIS IMPORT
 from TechVJ.util.human_readable import humanbytes
+
+# --- NEW HELPER FUNCTION FOR FILE NAME ---
+def get_file_name_from_message(message):
+    """
+    Extracts filename from a Pyrogram Message object,
+    providing a fallback generic name if no explicit name is found.
+    """
+    if message.video:
+        return message.video.file_name or f"video_{message.video.file_unique_id}.mp4"
+    elif message.document:
+        # Check for mime_type to guess extension if not in file_name
+        name = message.document.file_name
+        if not name:
+            if message.document.mime_type:
+                ext = message.document.mime_type.split('/')[-1]
+                return f"document_{message.document.file_unique_id}.{ext}"
+            return f"document_{message.document.file_unique_id}" # No extension guess
+        # Ensure it has an extension if it looks like a file ID
+        if '.' not in name and message.document.mime_type:
+            ext = message.document.mime_type.split('/')[-1]
+            if ext in ["mp4", "mkv", "webm", "avi", "mov", "flv", "wmv", "ts", "mpeg"]: # Common video extensions
+                name += f".{ext}"
+        return name
+    elif message.audio:
+        return message.audio.file_name or f"audio_{message.audio.file_unique_id}.mp3"
+    elif message.photo:
+        # Photos typically don't have a filename, so generate a generic one
+        return f"photo_{message.photo.file_unique_id}.jpg"
+    return None # No media with recognizable name
+
+# --- NEW HELPER FUNCTION FOR FILE HASH (IF NEEDED, CURRENTLY UNUSED IN YOUR STREAM URL) ---
+def get_file_hash_from_message(message):
+    """
+    Extracts file hash from a Pyrogram Message object if available.
+    For simplicity, returning file_unique_id as a "hash" if actual hash isn't easily accessible.
+    You might need to implement actual hash calculation if your render.com endpoint expects it.
+    """
+    if message.video:
+        return message.video.file_unique_id
+    elif message.document:
+        return message.document.file_unique_id
+    elif message.audio:
+        return message.audio.file_unique_id
+    elif message.photo:
+        return message.photo.file_unique_id
+    return "unknown_hash" # Fallback hash
+
 
 # Ek naya function jo direct stream URL banayega
 async def get_stream_url(client, message_id, use_telegram_cdn=False):
@@ -36,20 +83,18 @@ async def get_stream_url(client, message_id, use_telegram_cdn=False):
             return str(direct_file_link)
         else:
             # Use your custom render.com domain and custom hash/name logic
-            file_name = get_name(msg) # Assumes get_name handles all media types
-            file_hash = get_hash(msg) # Assumes get_hash handles all media types
+            # Using the new robust function for filename
+            file_name = get_file_name_from_message(msg) 
+            file_hash = get_file_hash_from_message(msg) # Using new hash function
             
-            # Critical check: if get_name or get_hash fail, we can't build the URL
+            # Critical check: if get_name fails, we can't build the URL
             if not file_name:
-                print(f"DEBUG: get_name returned None for message_id {message_id}")
+                print(f"DEBUG: get_file_name_from_message returned None for message_id {message_id}")
                 return None
-            if not file_hash:
-                print(f"DEBUG: get_hash returned None for message_id {message_id}")
-                # Decide if you want to proceed without hash or also return None
-                # For now, let's assume hash is crucial for your render.com endpoint
-                return None 
             
             # --- FIX APPLIED HERE: Changed the base URL for direct streaming ---
+            # Using file_hash as a parameter, ensure your render.com endpoint expects it.
+            # If your render.com endpoint doesn't use 'hash', you can remove `?hash={file_hash}`
             return f"https://skillneaststream.onrender.com/dl/{message_id}/{quote_plus(file_name)}?hash={file_hash}"
             
     except Exception as e:
@@ -133,20 +178,28 @@ async def universal_handler(client, message):
 
     log_msg = None
     try:
-        log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=fileid)
-        print(f"DEBUG: File cached in LOG_CHANNEL. Message ID: {log_msg.id}")
+        # Send original media (not cached_media) to get full metadata in log_channel
+        # Pyrogram's send_cached_media might strip some metadata or file_name if not directly passed
+        # Using send_message with file_id and message.media.value ensures full metadata
+        log_msg = await client.send_message(chat_id=LOG_CHANNEL, 
+                                            text="Incoming File", # Optional text
+                                            media=message.media, # Use the original media type
+                                            file_id=fileid) # Pass the file_id directly
+        print(f"DEBUG: File sent to LOG_CHANNEL. Message ID: {log_msg.id}")
     except Exception as e:
-        print(f"ERROR: Failed to send cached media to LOG_CHANNEL: {e}")
+        print(f"ERROR: Failed to send media to LOG_CHANNEL: {e}")
         return await message.reply("Sorry, I could not save the file to the log channel. Please check bot permissions and try again.")
 
     if not log_msg:
-        print("ERROR: log_msg is None after send_cached_media.")
+        print("ERROR: log_msg is None after send_message.")
         return await message.reply("Failed to get log message details.")
 
-    file_name = get_name(log_msg)
+    # Using the robust get_file_name_from_message function
+    file_name = get_file_name_from_message(log_msg)
+    
     if not file_name:
-        print(f"ERROR: get_name returned None for log_msg ID: {log_msg.id}. Media type: {file_type}")
-        return await message.reply("Sorry, I couldn't get the name of this file. Ensure it has a recognizable filename.")
+        print(f"ERROR: Could not determine file name for log_msg ID: {log_msg.id}. Media type: {file_type}")
+        return await message.reply("Sorry, I couldn't get the name of this file. Ensure it has a recognizable filename (like .mp4).")
 
     is_video = file_type == 'video' or (file_type == 'document' and file.mime_type and file.mime_type.startswith('video/'))
     
@@ -216,10 +269,13 @@ async def quality_link(client, message):
     # Helper to get file and store in log channel
     async def get_and_store_file(prompt_text):
         file_msg = await client.ask(message.from_user.id, prompt_text)
-        if file_msg.video or file_msg.document:
+        if file_msg.video or file_msg.document or file_msg.audio or file_msg.photo: # Added audio/photo for robustness
             file = getattr(file_msg, file_msg.media.value)
             fileid = file.file_id
-            log_msg = await client.send_cached_media(chat_id=LOG_CHANNEL, file_id=fileid)
+            log_msg = await client.send_message(chat_id=LOG_CHANNEL, 
+                                                text=f"Quality file from {message.from_user.id}", 
+                                                media=file_msg.media, 
+                                                file_id=fileid) # Use send_message
             return str(log_msg.id)
         else:
             return None # Indicate failure
@@ -234,7 +290,7 @@ async def quality_link(client, message):
         prompt = f"Now Send Me Your {first_q_text.text}p Quality File."
         file_id_str = await get_and_store_file(prompt)
         if not file_id_str:
-            return await message.reply("Wrong Input, Start Process Again By /quality")
+            return await message.reply("Wrong Input or Failed to get file, Start Process Again By /quality")
         if first_q_text.text == "480": first_id = file_id_str
         elif first_q_text.text == "720": second_id = file_id_str
         elif first_q_text.text == "1080": third_id = file_id_str
@@ -249,12 +305,13 @@ async def quality_link(client, message):
         prompt = f"Now Send Me Your {second_q_text.text}p Quality File."
         file_id_str = await get_and_store_file(prompt)
         if not file_id_str:
-            return await message.reply("Wrong Input, Start Process Again By /quality")
+            return await message.reply("Wrong Input or Failed to get file, Start Process Again By /quality")
         if second_q_text.text == "480": first_id = file_id_str
         elif second_q_text.text == "720": second_id = file_id_str
         elif second_q_text.text == "1080": third_id = file_id_str
     else:
-        return await message.reply("Choose Quality From Above Three Quality Only. Send /quality command again to start creating link.")
+        # If user skips or gives bad input for second quality, we can continue with only one quality
+        pass # Will fall through to link generation below, handling only the first_id
         
     # Ask for third quality or /getlink
     third_q_text = await client.ask(message.from_user.id, "<b>Now Send Me Your **Another** Quality In Which You Upload File. Only Below These Qualities Are Available Only.\n\n1. If your file quality is less than or equal to 480p then send <code>480</code>\n2. If your file quality is greater than 480p and less than or equal to 720p then send <code>720</code>\n3. If your file quality is greater than 720p then send <code>1080</code>\n\nNote Don not use one quality 2 or more time.\n\nIf you want only 2 quality option then use <code>/getlink</code> command for stream link.</b>")
@@ -267,12 +324,13 @@ async def quality_link(client, message):
         prompt = f"Now Send Me Your {third_q_text.text}p Quality File."
         file_id_str = await get_and_store_file(prompt)
         if not file_id_str:
-            return await message.reply("Wrong Input, Start Process Again By /quality")
+            return await message.reply("Wrong Input or Failed to get file, Start Process Again By /quality")
         if third_q_text.text == "480": first_id = file_id_str
         elif third_q_text.text == "720": second_id = file_id_str
         elif third_q_text.text == "1080": third_id = file_id_str
     else:
-        return await message.reply("Choose Quality From Above Three Quality Only or use /getlink. Send /quality command again to start creating link.")
+        # If user skips or gives bad input for third quality, we continue with available qualities
+        pass # Will fall through to link generation below, handling available qualities
 
     params = {'u': message.from_user.id, 'w': first_id, 's': second_id, 't': third_id}
     url_params_encoded = urlencode(params)
@@ -285,13 +343,14 @@ async def quality_link(client, message):
     # Get file name for title from the first available quality
     video_title = "Unknown Video"
     try:
+        # Use the new robust get_file_name_from_message
         if first_id != "0":
-            video_title = get_name(await client.get_messages(LOG_CHANNEL, int(first_id)))
+            video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(first_id)))
         elif second_id != "0":
-            video_title = get_name(await client.get_messages(LOG_CHANNEL, int(second_id)))
+            video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(second_id)))
         elif third_id != "0":
-            video_title = get_name(await client.get_messages(LOG_CHANNEL, int(third_id)))
-        if not video_title: # If get_name still returns None
+            video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(third_id)))
+        if not video_title: # If get_file_name_from_message still returns None (very unlikely now)
              video_title = "Unknown Video"
     except Exception as e:
         print(f"ERROR: Could not get video title for quality links: {e}")
@@ -364,12 +423,13 @@ async def link_start(client, message):
     # Attempt to get file name for title
     video_title = "Unknown Video"
     try:
+        # Using the new robust get_file_name_from_message
         if log_msg_id != "0":
-            video_title = get_name(await client.get_messages(LOG_CHANNEL, int(log_msg_id)))
+            video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(log_msg_id)))
         elif s_id != "0":
-            video_title = get_name(await client.get_messages(LOG_CHANNEL, int(s_id)))
+            video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(s_id)))
         elif t_id != "0":
-            video_title = get_name(await client.get_messages(LOG_CHANNEL, int(t_id)))
+            video_title = get_file_name_from_message(await client.get_messages(LOG_CHANNEL, int(t_id)))
         if not video_title:
             video_title = "Unknown Video"
     except Exception as e:

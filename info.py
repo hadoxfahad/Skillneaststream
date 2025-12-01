@@ -1,3 +1,5 @@
+# info.py
+
 import re
 from os import environ
 
@@ -8,32 +10,35 @@ SESSION = environ.get('SESSION', 'TechVJBot')
 API_ID = int(environ.get('API_ID', '22177421'))
 API_HASH = environ.get('API_HASH', 'e515bbf4a302d7c7335f689a52b196a5')
 
-# Bot Token, This Is Main Bot
+# Bot Token
 BOT_TOKEN = environ.get('BOT_TOKEN', "")
 
-# Admin Telegram Account Id For Withdraw Notification Or Anything Else
-ADMIN = int(environ.get('ADMIN', '1865244712'))
+# Admin ID (Single ID or List)
+ADMIN_ENV = environ.get('ADMIN', '1865244712')
+# String ko list me convert kar rahe hain taaki multiple admins bhi add ho sakein
+ADMINS = [int(x) for x in ADMIN_ENV.split()]
 
-# Back Up Bot Token For Fetching Message When Floodwait Comes
+# Back Up Bot Token
 BACKUP_BOT_TOKEN = environ.get('BACKUP_BOT_TOKEN', "")
 
-# Log Channel, In This Channel Your All File Stored.
+# Log Channel
 LOG_CHANNEL = int(environ.get('LOG_CHANNEL', '-1002869695930'))
 
-# Mongodb Database For User Link Click Count Etc Data Store.
+# Mongodb Database
 MONGODB_URI = environ.get("MONGODB_URI", "")
 
-# Stream Url Means Your Deploy Server App Url, Here You Media Will Be Stream And Ads Will Be Shown.
-STREAM_URL = environ.get("STREAM_URL", "https://skillneaststream.onrender.com/")
+# Stream Url (Render URL) - Trailing slash hata diya hai safety ke liye
+STREAM_URL = environ.get("STREAM_URL", "https://skillneaststream.onrender.com").rstrip("/")
 
-# This Link Used As Permanent Link That If Your Deploy App Deleted Then You Change Stream Url, So This Link Will Redirect To Stream Url.
+# Permanent Link
 LINK_URL = environ.get("LINK_URL", "https://skillneast.blogspot.com/p/s_7.html")
 
-# Others, Not Usefull
+# Others
 PORT = environ.get("PORT", "8080")
 MULTI_CLIENT = False
 SLEEP_THRESHOLD = int(environ.get('SLEEP_THRESHOLD', '60'))
-PING_INTERVAL = int(environ.get("PING_INTERVAL", "1200"))  # 20 minutes
+PING_INTERVAL = int(environ.get("PING_INTERVAL", "1200"))
+
 if 'DYNO' in environ:
     ON_HEROKU = True
 else:

@@ -1,6 +1,5 @@
 import asyncio
 import os
-import json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from info import *
@@ -25,7 +24,7 @@ user_session = {}
 
 # --- Helper: Safe ID Comparison ---
 def check_id_match(data, target_id, keys_to_check):
-    """Multiple keys check karta hai match ke liye"""
+    """Checks multiple keys to match ID (String/Int safe)"""
     target_str = str(target_id).strip()
     
     for key in keys_to_check:
@@ -72,22 +71,19 @@ async def list_categories(bot, query: CallbackQuery):
     try:
         cats = db.child("categories").get()
         buttons = []
-        print("\n--- DEBUG: CATEGORIES ---")
         if cats.each():
             for cat in cats.each():
                 c_data = cat.val()
-                c_key = cat.key()
                 c_name = c_data.get("name", "Unnamed")
-                print(f"Key: {c_key}, Name: {c_name}")
-                buttons.append([InlineKeyboardButton(c_name, callback_data=f"fb_sel_cat_{c_key}")])
+                buttons.append([InlineKeyboardButton(c_name, callback_data=f"fb_sel_cat_{cat.key()}")])
         
         await query.message.edit_text("**Select Category:**", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
-        await query.message.edit_text(f"Error: {e}")
+        await query.message.edit_text(f"Error fetching categories: {e}")
 
-# 2. Courses (FIXED)
+# 2. Batches (Previously Courses) - FIXED HERE
 @Client.on_callback_query(filters.regex("^fb_sel_cat_"))
-async def list_courses(bot, query: CallbackQuery):
+async def list_batches(bot, query: CallbackQuery):
     cat_id = query.data.split("_")[3]
     user_id = query.from_user.id
     
@@ -95,68 +91,67 @@ async def list_courses(bot, query: CallbackQuery):
     user_session[user_id]["cat_id"] = cat_id
     
     try:
-        all_courses = db.child("courses").get()
+        # CHANGE: Looking in "batches" instead of "courses"
+        all_batches = db.child("batches").get()
         buttons = []
         
-        print(f"\n--- DEBUG: LOOKING FOR CAT_ID: {cat_id} ---")
+        print(f"\n--- DEBUG: Looking for Batches with Category ID: {cat_id} ---")
         
-        if all_courses.each():
-            for course in all_courses.each():
-                c_data = course.val()
-                c_key = course.key()
+        if all_batches.each():
+            for batch in all_batches.each():
+                b_data = batch.val()
+                b_key = batch.key()
                 
-                # Debug Print: Logs me check karna agar button na aaye
-                print(f"Checking Course: {c_data.get('name')} | Data: {c_data}")
-
-                # Check multiple possible field names
-                is_match = check_id_match(c_data, cat_id, ["categoryId", "category_id", "cat_id", "catId", "parent_id"])
+                # Check for categoryId inside the batch
+                is_match = check_id_match(b_data, cat_id, ["categoryId", "category_id", "cat_id", "catId", "parent_id"])
                 
                 if is_match:
-                    c_name = c_data.get("name", "Unnamed")
-                    buttons.append([InlineKeyboardButton(c_name, callback_data=f"fb_sel_course_{c_key}")])
+                    b_name = b_data.get("name", "Unnamed Batch")
+                    # Callback data store karega batch ID
+                    buttons.append([InlineKeyboardButton(b_name, callback_data=f"fb_sel_batch_{b_key}")])
         
         if not buttons:
-            buttons.append([InlineKeyboardButton("No Courses Found (Check Logs)", callback_data="ignore")])
+            buttons.append([InlineKeyboardButton("No Batches Found", callback_data="ignore")])
             
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="fb_cat_list")])
-        await query.message.edit_text(f"**Category ID:** `{cat_id}`\n\nCourse select karein:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**Category ID:** `{cat_id}`\n\nSelect Batch/Course:", reply_markup=InlineKeyboardMarkup(buttons))
         
     except Exception as e:
-        print(f"Error in courses: {e}")
-        await query.message.edit_text(f"Error fetching courses: {e}")
+        print(f"Error in batches: {e}")
+        await query.message.edit_text(f"Error fetching batches: {e}")
 
-# 3. Modules (FIXED)
-@Client.on_callback_query(filters.regex("^fb_sel_course_"))
+# 3. Modules (Updated to check Batch ID)
+@Client.on_callback_query(filters.regex("^fb_sel_batch_"))
 async def list_modules(bot, query: CallbackQuery):
-    course_id = query.data.split("_")[3]
+    batch_id = query.data.split("_")[3]
     user_id = query.from_user.id
-    user_session[user_id]["course_id"] = course_id
+    
+    # Store Batch ID (Assuming user considers Batch as Course)
+    user_session[user_id]["course_id"] = batch_id 
     
     try:
         all_modules = db.child("modules").get()
         buttons = []
         
-        print(f"\n--- DEBUG: LOOKING FOR COURSE_ID: {course_id} ---")
+        print(f"\n--- DEBUG: Looking for Modules with Batch/Course ID: {batch_id} ---")
 
         if all_modules.each():
             for mod in all_modules.each():
                 m_data = mod.val()
                 m_key = mod.key()
                 
-                print(f"Checking Module: {m_data.get('name')} | Data: {m_data}")
-
-                # Check multiple possible field names
-                is_match = check_id_match(m_data, course_id, ["courseId", "course_id", "course_Id", "parent_id"])
+                # Check match using batchId OR courseId (safety ke liye dono check kar rahe)
+                is_match = check_id_match(m_data, batch_id, ["batchId", "batch_id", "courseId", "course_id", "parent_id"])
                 
                 if is_match:
-                    m_name = m_data.get("name", "Unnamed")
+                    m_name = m_data.get("name", "Unnamed Module")
                     buttons.append([InlineKeyboardButton(m_name, callback_data=f"fb_set_mod_{m_key}")])
         
         if not buttons:
             buttons.append([InlineKeyboardButton("No Modules Found", callback_data="ignore")])
 
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_cat_{user_session[user_id]['cat_id']}")])
-        await query.message.edit_text(f"**Course ID:** `{course_id}`\n\nModule select karein:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**Batch/Course ID:** `{batch_id}`\n\nSelect Module:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
          await query.message.edit_text(f"Error fetching modules: {e}")
 
@@ -225,7 +220,7 @@ async def push_to_firebase(bot, query: CallbackQuery):
     
     try:
         db.child("lectures").push(new_entry)
-        await query.message.edit_text(f"✅ **Added!**\n{data['title']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Close", callback_data="ignore")]]))
+        await query.message.edit_text(f"✅ **Added!**\n{data['title']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Send Next Video", callback_data="ignore")]]))
     except Exception as e:
         await query.message.edit_text(f"Error: {e}")
 

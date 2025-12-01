@@ -1,5 +1,6 @@
 import asyncio
 import os
+import urllib.parse
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from info import *
@@ -21,40 +22,41 @@ firebase = pyrebase.initialize_app(firebaseConfig)
 db = firebase.database()
 
 # --- Session Structure ---
-# user_session = {
-#     user_id: {
-#         "cat_id": "...", 
-#         "batch_id": "...", 
-#         "module_id": "...", 
-#         "state": "idle" / "waiting_for_name",
-#         "temp_data": {"title": "...", "url": "..."}
-#     }
-# }
 user_session = {} 
 
 # --- Helper Functions ---
 
 async def get_stream_link(message: Message):
-    """Stream Link generate karta hai aur Filename nikalta hai"""
+    """
+    Generates Direct Stream Link (Raw File Link)
+    Format: STREAM_URL/ID/Filename
+    """
     try:
         log_msg = await message.forward(LOG_CHANNEL)
-        stream_link = f"{STREAM_URL}/watch/{log_msg.id}"
         
+        # File Name & Clean Name logic
         if message.video:
-            file_name = message.video.file_name or "Unknown Video"
+            file_name = message.video.file_name or f"Video_{log_msg.id}.mp4"
         elif message.document:
-            file_name = message.document.file_name or "Unknown File"
+            file_name = message.document.file_name or f"File_{log_msg.id}.pdf"
         else:
-            file_name = "Unknown_File"
+            file_name = f"File_{log_msg.id}"
             
-        clean_name = os.path.splitext(file_name)[0] # Extension (.mp4) hatata hai
+        clean_name = os.path.splitext(file_name)[0]
+        
+        # URL Encoding for safe link
+        safe_filename = urllib.parse.quote_plus(file_name)
+        
+        # --- DIRECT STREAM LINK GENERATION ---
+        # Ye link direct player me chalega (No Watch Page)
+        stream_link = f"{STREAM_URL}/{log_msg.id}/{safe_filename}"
+        
         return stream_link, clean_name, log_msg.id
     except Exception as e:
         print(f"Error generating link: {e}")
         return None, None, None
 
 def get_name(data):
-    """Database se Name nikalta hai"""
     if not data: return "Unnamed"
     return data.get("name") or data.get("title") or data.get("description") or "Unnamed"
 
@@ -63,18 +65,17 @@ def get_name(data):
 @Client.on_message(filters.command("firebase") & filters.user(ADMINS))
 async def firebase_panel(bot, message):
     user_id = message.from_user.id
-    # Reset Session
     user_session[user_id] = {"state": "idle"}
     
     await message.reply_text(
-        "**🔥 Firebase Admin Panel**\n\nDatabase Connected! Start karein:",
+        "**🔥 Firebase Admin Panel**\n\nReady to add Content!",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📂 Select Category", callback_data="fb_cat_list")],
             [InlineKeyboardButton("⚙️ Change Mode (File/URL)", callback_data="fb_mode_menu")]
         ])
     )
 
-# --- Navigation (Category -> Batch -> Module) ---
+# --- Navigation ---
 
 # 1. Categories
 @Client.on_callback_query(filters.regex("^fb_cat_list"))
@@ -112,7 +113,7 @@ async def list_batches(bot, query: CallbackQuery):
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="fb_cat_list")])
         await query.message.edit_text(f"**Category Selected!**\n\nAb Batch select karein:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
-        await query.message.edit_text(f"Error fetching batches: {e}")
+        await query.message.edit_text(f"Error: {e}")
 
 # 3. Modules
 @Client.on_callback_query(filters.regex("^fb_sel_batch_"))
@@ -134,7 +135,7 @@ async def list_modules(bot, query: CallbackQuery):
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_cat_{cat_id}")])
         await query.message.edit_text(f"**Batch Selected!**\n\nAb Module select karein:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
-         await query.message.edit_text(f"Error fetching modules: {e}")
+         await query.message.edit_text(f"Error: {e}")
 
 # 4. Set Module
 @Client.on_callback_query(filters.regex("^fb_set_mod_"))
@@ -147,11 +148,11 @@ async def set_active_module(bot, query: CallbackQuery):
     user_session[user_id]["mode"] = user_session[user_id].get("mode", "file")
     
     await query.message.edit_text(
-        f"✅ **Module Selected!**\nID: `{module_id}`\n\nAb Video/File bhejein.",
+        f"✅ **Module Configured!**\nID: `{module_id}`\n\nAb Video upload karein. Direct Stream Link banega.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Reset", callback_data="fb_cat_list")]])
     )
 
-# --- STEP 1: Video Handling & Link Generation ---
+# --- STEP 1: Process File & Generate Direct Link ---
 
 @Client.on_message((filters.video | filters.document) & filters.user(ADMINS))
 async def incoming_file_handler(bot, message):
@@ -159,86 +160,89 @@ async def incoming_file_handler(bot, message):
     if user_id not in user_session or "module_id" not in user_session[user_id]:
         return
     if user_session[user_id].get("mode") == "url":
-        return await message.reply("⚠️ Aapka Mode 'Link' hai. File bhejne ke liye Mode change karein.")
+        return await message.reply("⚠️ URL Mode Active. File allow nahi hai.")
 
-    status_msg = await message.reply_text("🔄 **Processing...**\nLink generate ho raha hai...")
+    status_msg = await message.reply_text("🔄 **Generating Direct Stream Link...**")
     stream_link, clean_name, log_id = await get_stream_link(message)
     
     if not stream_link:
         return await status_msg.edit("Error generating link.")
     
-    # Temp data store
+    # Save Temp Data
     user_session[user_id]["temp_data"] = {"title": clean_name, "url": stream_link}
     
-    # Ask for Name Confirmation
+    # Buttons
     buttons = [
         [InlineKeyboardButton("✅ Use Default Name", callback_data="fb_name_keep")],
-        [InlineKeyboardButton("✏️ Rename (Custom Name)", callback_data="fb_name_rename")]
+        [InlineKeyboardButton("✏️ Rename", callback_data="fb_name_rename")]
     ]
     
+    # --- HERE: SHOWING LINK IN MESSAGE ---
     await status_msg.edit_text(
-        f"**File Processed!**\n\n**Detected Name:** `{clean_name}`\n\nKya aap yahi naam rakhna chahte hain ya badalna chahte hain?",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        f"**✅ Link Generated!**\n\n"
+        f"**📂 Name:** `{clean_name}`\n"
+        f"**🔗 Direct URL:**\n`{stream_link}`\n\n"
+        f"Select Name Option:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        disable_web_page_preview=True
     )
 
-# --- STEP 2: Name Logic (Default vs Rename) ---
+# --- STEP 2: Naming Logic ---
 
-# Option A: Keep Default Name
 @Client.on_callback_query(filters.regex("^fb_name_keep"))
 async def keep_default_name(bot, query: CallbackQuery):
     user_id = query.from_user.id
     # Proceed to Type Selection
-    await ask_file_type(query.message, user_session[user_id]["temp_data"]["title"])
+    await ask_file_type(query.message, user_session[user_id]["temp_data"]["title"], user_session[user_id]["temp_data"]["url"])
 
-# Option B: Rename (Custom Name)
 @Client.on_callback_query(filters.regex("^fb_name_rename"))
 async def ask_for_rename(bot, query: CallbackQuery):
     user_id = query.from_user.id
     user_session[user_id]["state"] = "waiting_for_name"
     await query.message.edit_text(
-        "✏️ **Enter New Name:**\n\nAbhi naya naam type karke bhejein (Example: `Lecture 1: Introduction`).",
+        "✏️ **Send New Name:**\n\nType karke bhejein.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="fb_cat_list")]])
     )
 
-# Handling Text Input for Rename
 @Client.on_message(filters.text & filters.user(ADMINS))
 async def handle_rename_text(bot, message):
     user_id = message.from_user.id
     
-    # Check if we are waiting for a name
+    # Rename Handling
     if user_id in user_session and user_session[user_id].get("state") == "waiting_for_name":
-        if message.text.startswith("/"): return # Ignore commands
+        if message.text.startswith("/"): return 
         
         new_name = message.text.strip()
         user_session[user_id]["temp_data"]["title"] = new_name
-        user_session[user_id]["state"] = "idle" # Reset state
+        user_session[user_id]["state"] = "idle" 
         
-        await message.reply_text(f"✅ Name set to: **{new_name}**")
-        await ask_file_type(message, new_name)
+        await message.reply_text(f"✅ Renamed to: **{new_name}**")
+        # Call final step
+        await ask_file_type(message, new_name, user_session[user_id]["temp_data"]["url"])
 
-    # Handling Direct URL Mode input
+    # URL Mode Handling
     elif user_id in user_session and user_session[user_id].get("mode") == "url" and "module_id" in user_session[user_id]:
-        # (This logic is below in Direct URL section)
         await direct_url_logic(bot, message)
 
-# --- STEP 3: Ask Type (Lecture or Resource) ---
+# --- STEP 3: Ask Type (Lecture/Resource) ---
 
-async def ask_file_type(message, title):
-    # This helper function shows the final buttons
+async def ask_file_type(message, title, url):
     buttons = [
         [
-            InlineKeyboardButton("🎬 Add Lecture (Video)", callback_data="fb_confirm_lec"),
-            InlineKeyboardButton("📄 Add Resource (PDF)", callback_data="fb_confirm_res")
+            InlineKeyboardButton("🎬 Add Lecture", callback_data="fb_confirm_lec"),
+            InlineKeyboardButton("📄 Add Resource", callback_data="fb_confirm_res")
         ]
     ]
-    # Agar message object CallbackQuery se aaya hai ya normal Message se, handle karein
+    
+    text = f"**📌 Final Confirmation**\n\n**Name:** `{title}`\n**Link:** `{url}`\n\nAdd to Website?"
+    
     if isinstance(message, Message):
-        await message.reply_text(f"**Title:** `{title}`\n\nAb select karein ki isse kahan add karna hai:", reply_markup=InlineKeyboardMarkup(buttons))
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
     else:
-        # Edit message logic if needed (usually handled by caller)
-        pass
+        # If passed from callback, edit won't work easily if message structure changed, so send new
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
 
-# --- STEP 4: Final Push to Firebase ---
+# --- STEP 4: Push to Firebase ---
 
 @Client.on_callback_query(filters.regex("^fb_confirm_"))
 async def push_to_firebase(bot, query: CallbackQuery):
@@ -258,23 +262,23 @@ async def push_to_firebase(bot, query: CallbackQuery):
     
     new_entry = {
         "title": data["title"],
-        "url": data["url"], # Stream Link
+        "url": data["url"], # Direct Stream Link
         "type": type_tag,
         "createdAt": {".sv": "timestamp"}
     }
     
     try:
-        # Saving to: categories/{cat}/batches/{batch}/modules/{mod}/{lectures_or_resources}
+        # Saving to specific path
         db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").child(module_id).child(target_node).push(new_entry)
         
         await query.message.edit_text(
-            f"✅ **Successfully Added!**\n\n**Folder:** {target_node.upper()}\n**Name:** {data['title']}\n**Link:** Stream URL Added\n\nWebsite par check karein.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Send Next File", callback_data="ignore")]])
+            f"✅ **Saved to Website!**\n\n**Name:** {data['title']}\n**Link:** `{data['url']}`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Close", callback_data="fb_cat_list")]])
         )
     except Exception as e:
-        await query.message.edit_text(f"❌ Error Saving: {e}")
+        await query.message.edit_text(f"❌ Error: {e}")
 
-# --- URL Mode Logic ---
+# --- URL Mode ---
 
 @Client.on_callback_query(filters.regex("^fb_mode_menu"))
 async def mode_menu(bot, query: CallbackQuery):
@@ -292,7 +296,6 @@ async def set_mode_func(bot, query: CallbackQuery):
     await query.message.edit_text(f"✅ Mode Updated: **{mode.upper()}**")
 
 async def direct_url_logic(bot, message):
-    # Handles text input when Mode is URL
     user_id = message.from_user.id
     text = message.text.strip()
     
@@ -308,11 +311,10 @@ async def direct_url_logic(bot, message):
     batch_id = user_session[user_id]["batch_id"]
     module_id = user_session[user_id]["module_id"]
 
-    # Direct URL Lectures me add hoga
     db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").child(module_id).child("lectures").push({
         "title": title,
         "url": url,
         "type": "video",
         "createdAt": {".sv": "timestamp"}
     })
-    await message.reply_text(f"✅ **Link Added!**\nName: {title}")
+    await message.reply_text(f"✅ **Link Added!**\nLink: `{url}`", disable_web_page_preview=True)

@@ -20,21 +20,14 @@ firebaseConfig = {
 firebase = pyrebase.initialize_app(firebaseConfig)
 db = firebase.database()
 
+# Session Structure: Stores selected IDs to build the path
+# {user_id: {"cat_id": "...", "batch_id": "...", "module_id": "...", "mode": "file"}}
 user_session = {} 
 
-# --- Helper: Safe ID Comparison ---
-def check_id_match(data, target_id, keys_to_check):
-    """Checks multiple keys to match ID (String/Int safe)"""
-    target_str = str(target_id).strip()
-    
-    for key in keys_to_check:
-        if key in data:
-            val = str(data[key]).strip()
-            if val == target_str:
-                return True
-    return False
+# --- Helper Functions ---
 
 async def get_stream_link(message: Message):
+    """Generates Stream Link & Extracts Filename"""
     try:
         log_msg = await message.forward(LOG_CHANNEL)
         stream_link = f"{STREAM_URL}/watch/{log_msg.id}"
@@ -52,36 +45,43 @@ async def get_stream_link(message: Message):
         print(f"Error generating link: {e}")
         return None, None, None
 
+def get_name(data):
+    """Extracts Name/Title/Description from Data"""
+    return data.get("name") or data.get("title") or data.get("description") or "Unnamed"
+
 # --- Main Command ---
+
 @Client.on_message(filters.command("firebase") & filters.user(ADMINS))
 async def firebase_panel(bot, message):
     await message.reply_text(
-        "**🔥 Firebase Admin Panel**",
+        "**🔥 Firebase Admin Panel**\n\nDatabase Connected Successfully!",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📂 Select Category", callback_data="fb_cat_list")],
             [InlineKeyboardButton("⚙️ Change Mode", callback_data="fb_mode_menu")]
         ])
     )
 
-# --- Navigation Callbacks ---
+# --- Navigation (Nested Logic) ---
 
-# 1. Categories
+# 1. Categories List (Root Level)
 @Client.on_callback_query(filters.regex("^fb_cat_list"))
 async def list_categories(bot, query: CallbackQuery):
     try:
         cats = db.child("categories").get()
         buttons = []
+        
         if cats.each():
             for cat in cats.each():
                 c_data = cat.val()
-                c_name = c_data.get("name", "Unnamed")
+                c_name = get_name(c_data)
+                # Category ID store kar rahe hain
                 buttons.append([InlineKeyboardButton(c_name, callback_data=f"fb_sel_cat_{cat.key()}")])
         
         await query.message.edit_text("**Select Category:**", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
-        await query.message.edit_text(f"Error fetching categories: {e}")
+        await query.message.edit_text(f"Error: {e}")
 
-# 2. Batches (Previously Courses) - FIXED HERE
+# 2. Batches List (Inside Selected Category)
 @Client.on_callback_query(filters.regex("^fb_sel_cat_"))
 async def list_batches(bot, query: CallbackQuery):
     cat_id = query.data.split("_")[3]
@@ -91,71 +91,54 @@ async def list_batches(bot, query: CallbackQuery):
     user_session[user_id]["cat_id"] = cat_id
     
     try:
-        # CHANGE: Looking in "batches" instead of "courses"
-        all_batches = db.child("batches").get()
+        # LOGIC CHANGE: Path is categories/{cat_id}/batches
+        batches = db.child("categories").child(cat_id).child("batches").get()
         buttons = []
         
-        print(f"\n--- DEBUG: Looking for Batches with Category ID: {cat_id} ---")
-        
-        if all_batches.each():
-            for batch in all_batches.each():
+        if batches.each():
+            for batch in batches.each():
                 b_data = batch.val()
-                b_key = batch.key()
-                
-                # Check for categoryId inside the batch
-                is_match = check_id_match(b_data, cat_id, ["categoryId", "category_id", "cat_id", "catId", "parent_id"])
-                
-                if is_match:
-                    b_name = b_data.get("name", "Unnamed Batch")
-                    # Callback data store karega batch ID
-                    buttons.append([InlineKeyboardButton(b_name, callback_data=f"fb_sel_batch_{b_key}")])
+                b_name = get_name(b_data)
+                buttons.append([InlineKeyboardButton(b_name, callback_data=f"fb_sel_batch_{batch.key()}")])
         
         if not buttons:
             buttons.append([InlineKeyboardButton("No Batches Found", callback_data="ignore")])
             
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="fb_cat_list")])
-        await query.message.edit_text(f"**Category ID:** `{cat_id}`\n\nSelect Batch/Course:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**Category Selected!**\n\nAb Batch select karein:", reply_markup=InlineKeyboardMarkup(buttons))
         
     except Exception as e:
-        print(f"Error in batches: {e}")
         await query.message.edit_text(f"Error fetching batches: {e}")
 
-# 3. Modules (Updated to check Batch ID)
+# 3. Modules List (Inside Selected Batch)
 @Client.on_callback_query(filters.regex("^fb_sel_batch_"))
 async def list_modules(bot, query: CallbackQuery):
     batch_id = query.data.split("_")[3]
     user_id = query.from_user.id
     
-    # Store Batch ID (Assuming user considers Batch as Course)
-    user_session[user_id]["course_id"] = batch_id 
+    cat_id = user_session[user_id].get("cat_id")
+    user_session[user_id]["batch_id"] = batch_id
     
     try:
-        all_modules = db.child("modules").get()
+        # LOGIC CHANGE: Path is categories/{cat_id}/batches/{batch_id}/modules
+        modules = db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get()
         buttons = []
         
-        print(f"\n--- DEBUG: Looking for Modules with Batch/Course ID: {batch_id} ---")
-
-        if all_modules.each():
-            for mod in all_modules.each():
+        if modules.each():
+            for mod in modules.each():
                 m_data = mod.val()
-                m_key = mod.key()
-                
-                # Check match using batchId OR courseId (safety ke liye dono check kar rahe)
-                is_match = check_id_match(m_data, batch_id, ["batchId", "batch_id", "courseId", "course_id", "parent_id"])
-                
-                if is_match:
-                    m_name = m_data.get("name", "Unnamed Module")
-                    buttons.append([InlineKeyboardButton(m_name, callback_data=f"fb_set_mod_{m_key}")])
+                m_name = get_name(m_data)
+                buttons.append([InlineKeyboardButton(m_name, callback_data=f"fb_set_mod_{mod.key()}")])
         
         if not buttons:
             buttons.append([InlineKeyboardButton("No Modules Found", callback_data="ignore")])
 
-        buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_cat_{user_session[user_id]['cat_id']}")])
-        await query.message.edit_text(f"**Batch/Course ID:** `{batch_id}`\n\nSelect Module:", reply_markup=InlineKeyboardMarkup(buttons))
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_cat_{cat_id}")])
+        await query.message.edit_text(f"**Batch Selected!**\n\nAb Module select karein:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
          await query.message.edit_text(f"Error fetching modules: {e}")
 
-# 4. Set Module
+# 4. Set Module (Final Selection)
 @Client.on_callback_query(filters.regex("^fb_set_mod_"))
 async def set_active_module(bot, query: CallbackQuery):
     module_id = query.data.split("_")[3]
@@ -176,9 +159,9 @@ async def incoming_file_handler(bot, message):
     if user_id not in user_session or "module_id" not in user_session[user_id]:
         return
     if user_session[user_id].get("mode") == "url":
-        return await message.reply("⚠️ Mode 'Link' hai. File ke liye mode change karein.")
+        return await message.reply("⚠️ Aapka Mode 'Link' hai. File bhejne ke liye Mode change karein.")
 
-    status_msg = await message.reply_text("🔄 **Processing...**")
+    status_msg = await message.reply_text("🔄 **Generating Link...**")
     stream_link, clean_name, log_id = await get_stream_link(message)
     
     if not stream_link:
@@ -193,25 +176,29 @@ async def incoming_file_handler(bot, message):
     ]
     
     await status_msg.edit_text(
-        f"**File:** `{clean_name}`\n\nAdd to Website?",
+        f"**Title:** `{clean_name}`\n\nIsse website par kaise add karna hai?",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# --- Confirm Add ---
+# --- Confirm Add (Writing to Nested Path) ---
 @Client.on_callback_query(filters.regex("^fb_confirm_"))
 async def push_to_firebase(bot, query: CallbackQuery):
-    action = query.data.split("_")[2]
+    action = query.data.split("_")[2] # 'lec' or 'res'
     user_id = query.from_user.id
     
     if user_id not in user_session or "temp_data" not in user_session[user_id]:
         return await query.answer("Session expired.", show_alert=True)
     
     data = user_session[user_id]["temp_data"]
+    
+    # Getting full path IDs
+    cat_id = user_session[user_id]["cat_id"]
+    batch_id = user_session[user_id]["batch_id"]
     module_id = user_session[user_id]["module_id"]
+    
     type_ = "video" if action == "lec" else "pdf"
     
     new_entry = {
-        "moduleId": module_id,
         "title": data["title"],
         "url": data["url"],
         "type": type_,
@@ -219,12 +206,18 @@ async def push_to_firebase(bot, query: CallbackQuery):
     }
     
     try:
-        db.child("lectures").push(new_entry)
-        await query.message.edit_text(f"✅ **Added!**\n{data['title']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Send Next Video", callback_data="ignore")]]))
+        # LOGIC CHANGE: Saving inside the specific module path
+        # Path: categories/{cat_id}/batches/{batch_id}/modules/{module_id}/lectures
+        db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").child(module_id).child("lectures").push(new_entry)
+        
+        await query.message.edit_text(
+            f"✅ **Added Successfully!**\n\n**Category:** {cat_id}\n**Module:** {module_id}\n**Title:** {data['title']}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Send Next Video", callback_data="ignore")]])
+        )
     except Exception as e:
-        await query.message.edit_text(f"Error: {e}")
+        await query.message.edit_text(f"❌ Error Saving: {e}")
 
-# --- Mode & URL ---
+# --- URL Mode ---
 @Client.on_callback_query(filters.regex("^fb_mode_menu"))
 async def mode_menu(bot, query: CallbackQuery):
     await query.message.edit_text("Select Mode:", reply_markup=InlineKeyboardMarkup([
@@ -238,7 +231,7 @@ async def set_mode_func(bot, query: CallbackQuery):
     user_id = query.from_user.id
     if user_id not in user_session: user_session[user_id] = {}
     user_session[user_id]["mode"] = mode
-    await query.message.edit_text(f"✅ Mode: **{mode.upper()}**")
+    await query.message.edit_text(f"✅ Mode Updated: **{mode.upper()}**")
 
 @Client.on_message(filters.text & filters.user(ADMINS))
 async def direct_url_handler(bot, message):
@@ -253,11 +246,14 @@ async def direct_url_handler(bot, message):
         else:
             return
 
-        db.child("lectures").push({
-            "moduleId": user_session[user_id]["module_id"],
+        cat_id = user_session[user_id]["cat_id"]
+        batch_id = user_session[user_id]["batch_id"]
+        module_id = user_session[user_id]["module_id"]
+
+        db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").child(module_id).child("lectures").push({
             "title": title,
             "url": url,
             "type": "video",
             "createdAt": {".sv": "timestamp"}
         })
-        await message.reply_text(f"✅ Added: {title}")
+        await message.reply_text(f"✅ Added Link: {title}")

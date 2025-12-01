@@ -1,5 +1,3 @@
-# info.py
-
 import re
 from os import environ
 
@@ -13,10 +11,20 @@ API_HASH = environ.get('API_HASH', 'e515bbf4a302d7c7335f689a52b196a5')
 # Bot Token
 BOT_TOKEN = environ.get('BOT_TOKEN', "")
 
-# Admin ID (Single ID or List)
-ADMIN_ENV = environ.get('ADMIN', '1865244712')
-# String ko list me convert kar rahe hain taaki multiple admins bhi add ho sakein
-ADMINS = [int(x) for x in ADMIN_ENV.split()]
+# --- ADMIN SETUP (FIXED) ---
+# Raw ID from environment
+ADMIN_TXT = environ.get('ADMIN', '1865244712')
+
+# 1. ADMIN: Ye purani files ke liye hai (Start.py etc.)
+# Agar multiple IDs hain to ye pehli ID utha lega
+try:
+    ADMIN = int(ADMIN_TXT.split()[0])
+except:
+    ADMIN = 1865244712 # Fallback if error
+
+# 2. ADMINS: Ye new Firebase plugin ke liye hai (List of IDs)
+ADMINS = [int(x) for x in ADMIN_TXT.split()]
+# ---------------------------
 
 # Back Up Bot Token
 BACKUP_BOT_TOKEN = environ.get('BACKUP_BOT_TOKEN', "")
@@ -27,7 +35,7 @@ LOG_CHANNEL = int(environ.get('LOG_CHANNEL', '-1002869695930'))
 # Mongodb Database
 MONGODB_URI = environ.get("MONGODB_URI", "")
 
-# Stream Url (Render URL) - Trailing slash hata diya hai safety ke liye
+# Stream Url (Trailing slash removed for safety)
 STREAM_URL = environ.get("STREAM_URL", "https://skillneaststream.onrender.com").rstrip("/")
 
 # Permanent Link

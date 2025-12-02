@@ -79,18 +79,28 @@ async def firebase_panel(bot, message):
 @Client.on_callback_query(filters.regex("^fb_cat_list"))
 async def list_categories(bot, query: CallbackQuery):
     try:
-        cats = db.child("categories").get()
+        # Use .val() instead of .each() for reliability
+        cats_data = db.child("categories").get().val()
         buttons = []
-        if cats.each():
-            for cat in cats.each():
-                c_name = get_name(cat.val())
-                buttons.append([InlineKeyboardButton(f"📂 {c_name}", callback_data=f"fb_sel_cat_{cat.key()}")])
+        
+        if cats_data:
+            # Handle Dictionary (Standard Firebase)
+            if isinstance(cats_data, dict):
+                for key, val in cats_data.items():
+                    c_name = get_name(val)
+                    buttons.append([InlineKeyboardButton(f"📂 {c_name}", callback_data=f"fb_sel_cat_{key}")])
+            # Handle List (Rare case)
+            elif isinstance(cats_data, list):
+                for i, val in enumerate(cats_data):
+                    if val:
+                        c_name = get_name(val)
+                        buttons.append([InlineKeyboardButton(f"📂 {c_name}", callback_data=f"fb_sel_cat_{i}")])
         
         await query.message.edit_text("**📂 Select Category:**", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
         await query.message.edit_text(f"Error fetching categories: {e}")
 
-# 2. Batches (FIXED LOGIC HERE)
+# 2. Batches (FIXED FOR YOUR SCREENSHOT)
 @Client.on_callback_query(filters.regex("^fb_sel_cat_"))
 async def list_batches(bot, query: CallbackQuery):
     cat_id = query.data.split("_")[3]
@@ -100,23 +110,25 @@ async def list_batches(bot, query: CallbackQuery):
     user_session[user_id]["cat_id"] = cat_id
     
     try:
-        # Fetch Data
-        batches_snapshot = db.child("categories").child(cat_id).child("batches").get()
+        # Directly fetch values (.val())
+        batches_data = db.child("categories").child(cat_id).child("batches").get().val()
         
         buttons = []
         
-        # Check if data exists
-        if batches_snapshot.val() is not None:
-            # Handle Pyrebase iteration safely
-            if batches_snapshot.each():
-                for batch in batches_snapshot.each():
-                    b_val = batch.val()
-                    b_key = batch.key()
-                    
-                    # Ensure value is dictionary (skip broken data)
-                    if isinstance(b_val, dict):
-                        b_name = get_name(b_val)
-                        buttons.append([InlineKeyboardButton(f"🎓 {b_name}", callback_data=f"fb_sel_batch_{b_key}")])
+        if batches_data:
+            # Check if it's a Dictionary (Keys like -Oe1E...)
+            if isinstance(batches_data, dict):
+                for key, val in batches_data.items():
+                    if isinstance(val, dict): # Ensure it's not a property like 'enabled'
+                        b_name = get_name(val)
+                        buttons.append([InlineKeyboardButton(f"🎓 {b_name}", callback_data=f"fb_sel_batch_{key}")])
+            
+            # Check if it's a List (Keys 0, 1, 2...)
+            elif isinstance(batches_data, list):
+                for i, val in enumerate(batches_data):
+                    if val and isinstance(val, dict):
+                        b_name = get_name(val)
+                        buttons.append([InlineKeyboardButton(f"🎓 {b_name}", callback_data=f"fb_sel_batch_{i}")])
         
         if not buttons:
              buttons.append([InlineKeyboardButton("🚫 No Batches Found", callback_data="ignore")])
@@ -138,14 +150,21 @@ async def list_modules(bot, query: CallbackQuery):
     user_session[user_id]["batch_id"] = batch_id
     
     try:
-        modules_ref = db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get()
+        # Use .val() here too
+        modules_data = db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get().val()
         buttons = []
-        if modules_ref.each():
-            for mod in modules_ref.each():
-                m_val = mod.val()
-                if isinstance(m_val, dict):
-                    m_name = get_name(m_val)
-                    buttons.append([InlineKeyboardButton(f"📺 {m_name}", callback_data=f"fb_set_mod_{mod.key()}")])
+        
+        if modules_data:
+            if isinstance(modules_data, dict):
+                for key, val in modules_data.items():
+                    if isinstance(val, dict):
+                        m_name = get_name(val)
+                        buttons.append([InlineKeyboardButton(f"📺 {m_name}", callback_data=f"fb_set_mod_{key}")])
+            elif isinstance(modules_data, list):
+                for i, val in enumerate(modules_data):
+                    if val and isinstance(val, dict):
+                        m_name = get_name(val)
+                        buttons.append([InlineKeyboardButton(f"📺 {m_name}", callback_data=f"fb_set_mod_{i}")])
         
         buttons.append([InlineKeyboardButton("➕ Create Module", callback_data="fb_create_mod")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_cat_{cat_id}")])
@@ -221,13 +240,19 @@ async def manage_content_list(bot, query: CallbackQuery):
     batch = user_session[user_id]["batch_id"]
     
     try:
-        lectures = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(module_id).child("lectures").get()
+        lectures_data = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(module_id).child("lectures").get().val()
         buttons = []
-        if lectures.each():
-            for l in lectures.each():
-                name = get_name(l.val())
-                key = l.key()
-                buttons.append([InlineKeyboardButton(f"📝 {name}", callback_data=f"fb_item_opt_{key}")])
+        
+        if lectures_data:
+            if isinstance(lectures_data, dict):
+                for key, val in lectures_data.items():
+                    name = get_name(val)
+                    buttons.append([InlineKeyboardButton(f"📝 {name}", callback_data=f"fb_item_opt_{key}")])
+            elif isinstance(lectures_data, list):
+                for i, val in enumerate(lectures_data):
+                    if val:
+                        name = get_name(val)
+                        buttons.append([InlineKeyboardButton(f"📝 {name}", callback_data=f"fb_item_opt_{i}")])
         
         buttons.append([InlineKeyboardButton("🔙 Back to Upload", callback_data=f"fb_set_mod_{module_id}")])
         await query.message.edit_text(f"**🗑 Manage Content**\n\nClick item to **Edit** or **Delete**:", reply_markup=InlineKeyboardMarkup(buttons))

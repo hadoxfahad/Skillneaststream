@@ -22,478 +22,374 @@ firebaseConfig = {
 firebase = pyrebase.initialize_app(firebaseConfig)
 db = firebase.database()
 
-# --- Session Structure ---
+# --- 2. Session Management ---
+# Structure: {user_id: {'cat': id, 'batch': id, 'mod': id, 'sub_mod': id, 'is_sub': bool, 'state': str}}
 user_session = {}
 
-# --- Helper Functions ---
+# --- 3. Helper Functions ---
+
+def get_name(data):
+    """Safe way to get name from Firebase data"""
+    if not data: return "Unnamed"
+    if isinstance(data, dict):
+        return data.get("name") or data.get("title") or "Unnamed"
+    return "Unnamed"
 
 async def get_stream_link(message: Message):
-    """Generates Direct Link & Cleans Filename"""
+    """Generates Stream Link & Clean Filename"""
     try:
         log_msg = await message.forward(LOG_CHANNEL)
         
         if message.video:
-            file_name = message.video.file_name or f"Video {log_msg.id}.mp4"
+            file_name = message.video.file_name or f"Video_{log_msg.id}.mp4"
         elif message.document:
-            file_name = message.document.file_name or f"File {log_msg.id}.pdf"
+            file_name = message.document.file_name or f"File_{log_msg.id}.pdf"
         else:
-            file_name = f"File {log_msg.id}"
+            file_name = f"File_{log_msg.id}"
             
         name_without_ext = os.path.splitext(file_name)[0]
-        clean_name = name_without_ext.replace("_", " ")
+        clean_name = name_without_ext.replace("_", " ").replace("-", " ")
         
         safe_filename = urllib.parse.quote_plus(file_name)
         stream_link = f"{STREAM_URL}/dl/{log_msg.id}/{safe_filename}"
         
         return stream_link, clean_name, log_msg.id
     except Exception as e:
-        print(f"Error generating link: {e}")
+        print(f"Link Gen Error: {e}")
         return None, None, None
 
-def get_name(data):
-    if not data: return "Unnamed"
-    if isinstance(data, dict):
-        return data.get("name") or data.get("title") or "Unnamed"
-    return "Unnamed"
-
-# --- Main Command ---
+# --- 4. Main Command & Navigation ---
 
 @Client.on_message(filters.command("firebase") & filters.user(ADMINS))
 async def firebase_panel(bot, message):
     user_id = message.from_user.id
-    # Reset Session
-    user_session[user_id] = {
-        "state": "idle",
-        "fast_mode": False,
-        "is_sub_module": False,
-        "sub_mod_id": None
-    }
+    user_session[user_id] = {"state": "idle", "is_sub": False} # Reset
     
     await message.reply_text(
-        "**🔥 Firebase Admin Panel**\n\nDatabase Connected!\nSelect a Category to start:",
+        "**🔥 Firebase Admin Panel**\n\nDatabase Connected!\nSelect a Category:",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📂 Select Category", callback_data="fb_cat_list")],
-            [InlineKeyboardButton("⚙️ Switch Mode (File/URL)", callback_data="fb_mode_menu")]
+            [InlineKeyboardButton("📂 Select Category", callback_data="fb_cat_list")]
         ])
     )
 
-# --- Navigation Handlers ---
-
-# 1. Categories
+# -- Category List --
 @Client.on_callback_query(filters.regex("^fb_cat_list"))
 async def list_categories(bot, query: CallbackQuery):
     try:
-        cats_data = db.child("categories").get().val()
+        cats = db.child("categories").get().val()
         buttons = []
-        
-        if cats_data:
-            if isinstance(cats_data, dict):
-                for key, val in cats_data.items():
-                    buttons.append([InlineKeyboardButton(f"📂 {get_name(val)}", callback_data=f"fb_sel_cat_{key}")])
-            elif isinstance(cats_data, list):
-                for i, val in enumerate(cats_data):
-                    if val: buttons.append([InlineKeyboardButton(f"📂 {get_name(val)}", callback_data=f"fb_sel_cat_{i}")])
+        if cats:
+            iterable = cats.items() if isinstance(cats, dict) else enumerate(cats)
+            for key, val in iterable:
+                if val: buttons.append([InlineKeyboardButton(f"📂 {get_name(val)}", callback_data=f"fb_sel_cat_{key}")])
         
         await query.message.edit_text("**📂 Select Category:**", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
-        await query.message.edit_text(f"Error fetching categories: {e}")
+        await query.message.edit_text(f"Error: {e}")
 
-# 2. Batches
+# -- Batch List --
 @Client.on_callback_query(filters.regex("^fb_sel_cat_"))
 async def list_batches(bot, query: CallbackQuery):
     cat_id = query.data.split("_")[3]
-    user_id = query.from_user.id
-    user_session[user_id]["cat_id"] = cat_id
+    user_session[query.from_user.id]["cat"] = cat_id
     
     try:
-        batches_data = db.child("categories").child(cat_id).child("batches").get().val()
+        batches = db.child("categories").child(cat_id).child("batches").get().val()
         buttons = []
-        
-        if batches_data:
-            if isinstance(batches_data, dict):
-                for key, val in batches_data.items():
-                    buttons.append([InlineKeyboardButton(f"🎓 {get_name(val)}", callback_data=f"fb_sel_batch_{key}")])
-            elif isinstance(batches_data, list):
-                for i, val in enumerate(batches_data):
-                    if val and isinstance(val, dict):
-                        buttons.append([InlineKeyboardButton(f"🎓 {get_name(val)}", callback_data=f"fb_sel_batch_{i}")])
+        if batches:
+            iterable = batches.items() if isinstance(batches, dict) else enumerate(batches)
+            for key, val in iterable:
+                if val: buttons.append([InlineKeyboardButton(f"🎓 {get_name(val)}", callback_data=f"fb_sel_batch_{key}")])
         
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data="fb_cat_list")])
-        await query.message.edit_text(f"**📂 Category ID:** `{cat_id}`\n\nSelect a **Batch**:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**📂 Category:** `{cat_id}`\nSelect Batch:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
         await query.message.edit_text(f"Error: {e}")
 
-# 3. Modules List
+# -- Module List --
 @Client.on_callback_query(filters.regex("^fb_sel_batch_"))
 async def list_modules(bot, query: CallbackQuery):
     batch_id = query.data.split("_")[3]
     user_id = query.from_user.id
-    
-    cat_id = user_session[user_id].get("cat_id")
-    user_session[user_id]["batch_id"] = batch_id
+    user_session[user_id]["batch"] = batch_id
+    cat_id = user_session[user_id]["cat"]
     
     try:
-        modules_data = db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get().val()
+        modules = db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get().val()
         buttons = []
-        
-        if modules_data:
-            if isinstance(modules_data, dict):
-                for key, val in modules_data.items():
-                    # Send to Module Menu (Split decision: Main vs Sub)
-                    buttons.append([InlineKeyboardButton(f"📺 {get_name(val)}", callback_data=f"fb_mod_menu_{key}")])
-            elif isinstance(modules_data, list):
-                for i, val in enumerate(modules_data):
-                    if val and isinstance(val, dict):
-                        buttons.append([InlineKeyboardButton(f"📺 {get_name(val)}", callback_data=f"fb_mod_menu_{i}")])
+        if modules:
+            iterable = modules.items() if isinstance(modules, dict) else enumerate(modules)
+            for key, val in iterable:
+                if val: buttons.append([InlineKeyboardButton(f"📺 {get_name(val)}", callback_data=f"fb_mod_menu_{key}")])
         
         buttons.append([InlineKeyboardButton("➕ Create Module", callback_data="fb_create_mod")])
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_cat_{cat_id}")])
         
-        await query.message.edit_text(f"**🎓 Batch ID:** `{batch_id}`\n\nSelect a **Module**:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**🎓 Batch:** `{batch_id}`\nSelect Module:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
-         await query.message.edit_text(f"Error: {e}")
+        await query.message.edit_text(f"Error: {e}")
 
-# --- 4. Module Menu & Sub-Module Logic (IMPORTANT) ---
+# --- 5. Module & Sub-Module Logic (The Core Request) ---
 
 @Client.on_callback_query(filters.regex("^fb_mod_menu_"))
-async def module_menu_handler(bot, query: CallbackQuery):
-    module_id = query.data.split("_")[3]
+async def module_menu(bot, query: CallbackQuery):
+    mod_id = query.data.split("_")[3]
     user_id = query.from_user.id
-    user_session[user_id]["module_id"] = module_id
-    
-    # Reset Sub-module state initially
-    user_session[user_id]["is_sub_module"] = False
-    user_session[user_id]["sub_mod_id"] = None
-    
-    buttons = [
-        [InlineKeyboardButton("✅ Select This Module", callback_data=f"fb_set_final_main")],
-        [InlineKeyboardButton("📂 Show Sub-Modules", callback_data=f"fb_list_submod_{module_id}")],
-        [InlineKeyboardButton("➕ Create Sub-Module", callback_data=f"fb_create_submod_ask")],
-        [InlineKeyboardButton("🔙 Back to Modules", callback_data=f"fb_sel_batch_{user_session[user_id]['batch_id']}")]
-    ]
-    
-    await query.message.edit_text(f"**📺 Module Selected:** `{module_id}`\n\nKya karna chahte hain?", reply_markup=InlineKeyboardMarkup(buttons))
+    user_session[user_id]["mod"] = mod_id
+    user_session[user_id]["is_sub"] = False # Reset submodule flag
+    user_session[user_id]["sub_mod"] = None
 
-@Client.on_callback_query(filters.regex("^fb_list_submod_"))
+    buttons = [
+        [InlineKeyboardButton("✅ Upload to THIS Module", callback_data="fb_set_active_main")],
+        [InlineKeyboardButton("📂 Open Sub-Modules", callback_data=f"fb_list_sub_{mod_id}")],
+        [InlineKeyboardButton("➕ Create Sub-Module", callback_data="fb_create_sub_ask")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"fb_sel_batch_{user_session[user_id]['batch']}")]
+    ]
+    await query.message.edit_text(f"**📺 Module:** `{mod_id}`\nWhat do you want to do?", reply_markup=InlineKeyboardMarkup(buttons))
+
+@Client.on_callback_query(filters.regex("^fb_list_sub_"))
 async def list_sub_modules(bot, query: CallbackQuery):
     mod_id = query.data.split("_")[3]
     user_id = query.from_user.id
-    cat = user_session[user_id]["cat_id"]
-    batch = user_session[user_id]["batch_id"]
+    cat, batch = user_session[user_id]["cat"], user_session[user_id]["batch"]
     
     try:
-        # Path: modules -> {id} -> subModules
+        # Fetching SubModules
         sub_mods = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod_id).child("subModules").get().val()
         buttons = []
         
-        if sub_mods and isinstance(sub_mods, dict):
-            for key, val in sub_mods.items():
-                buttons.append([InlineKeyboardButton(f"📑 {get_name(val)}", callback_data=f"fb_set_submod_{key}")])
+        if sub_mods:
+            iterable = sub_mods.items() if isinstance(sub_mods, dict) else enumerate(sub_mods)
+            for key, val in iterable:
+                buttons.append([InlineKeyboardButton(f"📑 {get_name(val)}", callback_data=f"fb_set_active_sub_{key}")])
         
-        if not buttons:
-            buttons.append([InlineKeyboardButton("🚫 No Sub-Modules Found", callback_data="ignore")])
-            
-        buttons.append([InlineKeyboardButton("➕ Create Sub-Module", callback_data="fb_create_submod_ask")])
-        buttons.append([InlineKeyboardButton("🔙 Back to Menu", callback_data=f"fb_mod_menu_{mod_id}")])
+        buttons.append([InlineKeyboardButton("➕ Create Sub-Module", callback_data="fb_create_sub_ask")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_mod_menu_{mod_id}")])
         
-        await query.message.edit_text("**📂 Sub-Modules List**\nSelect one to upload inside it:", reply_markup=InlineKeyboardMarkup(buttons))
-        
-    except Exception as e:
-        await query.message.edit_text(f"Error loading Sub-modules: {e}")
-
-# --- 5. Set Active Target (Main or Sub) ---
-
-@Client.on_callback_query(filters.regex("^fb_set_final_main"))
-async def set_main_module_active(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    user_session[user_id]["is_sub_module"] = False
-    user_session[user_id]["sub_mod_id"] = None
-    await show_dashboard(bot, query, "Main Module")
-
-@Client.on_callback_query(filters.regex("^fb_set_submod_"))
-async def set_sub_module_active(bot, query: CallbackQuery):
-    sub_mod_id = query.data.split("_")[3]
-    user_id = query.from_user.id
-    
-    user_session[user_id]["is_sub_module"] = True
-    user_session[user_id]["sub_mod_id"] = sub_mod_id
-    
-    await show_dashboard(bot, query, "Sub-Module")
-
-async def show_dashboard(bot, query, type_name):
-    user_id = query.from_user.id
-    user_session[user_id]["state"] = "active_firebase"
-    
-    # Info for Display
-    mod_id = user_session[user_id]["module_id"]
-    sub_id = user_session[user_id].get("sub_mod_id", "None")
-    
-    is_fast = user_session[user_id].get("fast_mode", False)
-    fast_status = "🟢 ON" if is_fast else "🔴 OFF"
-    fast_text = "⚡ Disable Fast Mode" if is_fast else "⚡ Enable Fast Mode"
-    
-    text = (
-        f"✅ **Target Set: {type_name}**\n\n"
-        f"📺 **Module:** `{mod_id}`\n"
-    )
-    if user_session[user_id]["is_sub_module"]:
-        text += f"📑 **Sub-Module:** `{sub_id}`\n"
-        
-    text += f"\n⚡ **Fast Mode:** {fast_status}\n⬇️ **Send Files Now:**"
-    
-    buttons = [
-        [InlineKeyboardButton("✏️ Manage Content", callback_data=f"fb_manage_idx")],
-        [InlineKeyboardButton(fast_text, callback_data="fb_toggle_fast")],
-        [InlineKeyboardButton("🔙 Back / Stop", callback_data=f"fb_mod_menu_{mod_id}")]
-    ]
-    
-    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-
-# --- Feature: Fast Mode ---
-
-@Client.on_callback_query(filters.regex("^fb_toggle_fast"))
-async def toggle_fast_mode(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    current = user_session[user_id].get("fast_mode", False)
-    
-    if not current:
-        buttons = [[InlineKeyboardButton("🎬 Lectures", callback_data="fb_set_fast_lec"), InlineKeyboardButton("📄 Resources", callback_data="fb_set_fast_res")]]
-        await query.message.edit_text("**⚡ Fast Mode Setup**\n\nUploads automatically kaha add karein?", reply_markup=InlineKeyboardMarkup(buttons))
-    else:
-        user_session[user_id]["fast_mode"] = False
-        type_name = "Sub-Module" if user_session[user_id]["is_sub_module"] else "Main Module"
-        await show_dashboard(bot, query, type_name)
-
-@Client.on_callback_query(filters.regex("^fb_set_fast_"))
-async def set_fast_type(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    type_ = query.data.split("_")[3] # lec or res
-    user_session[user_id]["fast_mode"] = True
-    user_session[user_id]["default_type"] = type_
-    
-    await query.answer("⚡ Fast Mode Enabled!", show_alert=True)
-    type_name = "Sub-Module" if user_session[user_id]["is_sub_module"] else "Main Module"
-    await show_dashboard(bot, query, type_name)
-
-# --- Feature: Manage Content (List/Del) ---
-
-@Client.on_callback_query(filters.regex("^fb_manage_idx"))
-async def manage_content_list(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    cat = user_session[user_id]["cat_id"]
-    batch = user_session[user_id]["batch_id"]
-    mod = user_session[user_id]["module_id"]
-    
-    # Determine Path based on selection
-    if user_session[user_id]["is_sub_module"]:
-        sub_mod = user_session[user_id]["sub_mod_id"]
-        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod)
-    else:
-        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod)
-
-    try:
-        # Showing lectures by default
-        lectures_data = base_path.child("lectures").get().val()
-        buttons = []
-        
-        if lectures_data:
-            if isinstance(lectures_data, dict):
-                for key, val in lectures_data.items():
-                    buttons.append([InlineKeyboardButton(f"🗑 {get_name(val)}", callback_data=f"fb_del_item_{key}")])
-        
-        type_name = "Sub-Module" if user_session[user_id]["is_sub_module"] else "Main Module"
-        buttons.append([InlineKeyboardButton("🔙 Back to Upload", callback_data="fb_back_dash")])
-        
-        await query.message.edit_text(f"**🗑 Delete Content from {type_name}**\nClick to delete permanently:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**📂 Sub-Modules inside `{mod_id}`**\nSelect one to upload inside it:", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
         await query.message.edit_text(f"Error: {e}")
+
+# --- 6. Set Active Dashboard ---
+
+@Client.on_callback_query(filters.regex("^fb_set_active_"))
+async def set_dashboard(bot, query: CallbackQuery):
+    data = query.data.split("_")
+    mode = data[3] # 'main' or 'sub'
+    user_id = query.from_user.id
+    
+    if mode == "sub":
+        sub_id = data[4]
+        user_session[user_id]["is_sub"] = True
+        user_session[user_id]["sub_mod"] = sub_id
+        target_name = "Sub-Module"
+    else:
+        user_session[user_id]["is_sub"] = False
+        user_session[user_id]["sub_mod"] = None
+        target_name = "Main Module"
+        
+    user_session[user_id]["state"] = "active"
+    await refresh_dashboard(bot, query.message, user_id, target_name)
+
+async def refresh_dashboard(bot, message, user_id, target_name):
+    sess = user_session[user_id]
+    fast_mode = sess.get("fast", False)
+    fast_emoji = "🟢 ON" if fast_mode else "🔴 OFF"
+    
+    details = f"📺 **Mod:** `{sess['mod']}`"
+    if sess['is_sub']:
+        details += f"\n📑 **Sub-Mod:** `{sess['sub_mod']}`"
+        
+    text = (f"✅ **Target Locked: {target_name}**\n{details}\n\n"
+            f"⚡ **Fast Mode:** {fast_emoji}\n"
+            "⬇️ **Send Video/PDF now to upload!**")
+            
+    buttons = [
+        [InlineKeyboardButton("⚡ Toggle Fast Mode", callback_data="fb_toggle_fast")],
+        [InlineKeyboardButton("🔙 Back / Stop", callback_data=f"fb_mod_menu_{sess['mod']}")]
+    ]
+    
+    # Check if called from callback or message
+    if isinstance(message, Message):
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+    else:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+@Client.on_callback_query(filters.regex("^fb_toggle_fast"))
+async def toggle_fast(bot, query: CallbackQuery):
+    user_id = query.from_user.id
+    curr = user_session[user_id].get("fast", False)
+    
+    if not curr:
+        # Enable logic
+        await query.message.edit_text(
+            "**⚡ Fast Mode Setup**\nSelect default upload type:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎬 Always Lectures", callback_data="fb_fast_set_lectures")],
+                [InlineKeyboardButton("📄 Always Resources", callback_data="fb_fast_set_resources")]
+            ])
+        )
+    else:
+        # Disable
+        user_session[user_id]["fast"] = False
+        target = "Sub-Module" if user_session[user_id]["is_sub"] else "Main Module"
+        await refresh_dashboard(bot, query.message, user_id, target)
+
+@Client.on_callback_query(filters.regex("^fb_fast_set_"))
+async def set_fast_type(bot, query: CallbackQuery):
+    u_type = query.data.split("_")[3] # lectures or resources
+    user_session[query.from_user.id]["fast"] = True
+    user_session[query.from_user.id]["fast_type"] = u_type
+    target = "Sub-Module" if user_session[query.from_user.id]["is_sub"] else "Main Module"
+    await query.answer("⚡ Fast Mode Activated!")
+    await refresh_dashboard(bot, query.message, query.from_user.id, target)
+
+# --- 7. File Upload Handler ---
+
+@Client.on_message((filters.video | filters.document) & filters.user(ADMINS))
+async def handle_file(bot, message):
+    user_id = message.from_user.id
+    if user_session.get(user_id, {}).get("state") != "active":
+        return await message.reply("⚠️ **Dashboard not active!**\nUse /firebase to start.")
+        
+    sess = user_session[user_id]
+    
+    # 1. Generate Link
+    processing = await message.reply("🔄 Processing...")
+    stream_link, clean_name, _ = await get_stream_link(message)
+    
+    if not stream_link:
+        return await processing.edit("❌ Error generating link.")
+    
+    # 2. Check Fast Mode
+    if sess.get("fast"):
+        upload_type = sess["fast_type"]
+        await push_to_firebase(bot, message, user_id, clean_name, stream_link, upload_type)
+        await processing.delete()
+        return
+
+    # 3. Manual Mode
+    user_session[user_id]["temp"] = {"name": clean_name, "link": stream_link}
+    await processing.delete()
+    await message.reply_text(
+        f"📂 **File:** `{clean_name}`\n\nWhere to add?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 As Lecture", callback_data="fb_confirm_lectures")],
+            [InlineKeyboardButton("📄 As Resource", callback_data="fb_confirm_resources")],
+            [InlineKeyboardButton("✏️ Rename", callback_data="fb_ask_rename")]
+        ])
+    )
+
+@Client.on_callback_query(filters.regex("^fb_confirm_"))
+async def manual_confirm(bot, query: CallbackQuery):
+    u_type = query.data.split("_")[2]
+    user_id = query.from_user.id
+    data = user_session[user_id]["temp"]
+    await push_to_firebase(bot, query.message, user_id, data["name"], data["link"], u_type)
+
+async def push_to_firebase(bot, message, user_id, name, link, u_type):
+    sess = user_session[user_id]
+    cat, batch, mod = sess["cat"], sess["batch"], sess["mod"]
+    
+    # Determine Base Path
+    if sess["is_sub"]:
+        sub_mod = sess["sub_mod"]
+        # Path: modules -> mod -> subModules -> subMod -> type (lectures/resources)
+        db_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod).child(u_type)
+        loc_text = f"Sub-Module ({u_type})"
+    else:
+        # Path: modules -> mod -> type
+        db_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(u_type)
+        loc_text = f"Main Module ({u_type})"
+
+    # Data Payload
+    ts = int(time.time() * 1000) # Order by timestamp
+    payload = {
+        "name": name,
+        "link": link,
+        "order": ts
+    }
+    
+    # Add extra 'type' field for resources (PDFs)
+    if u_type == "resources":
+        payload["type"] = "pdf" 
+
+    try:
+        ref = db_path.push(payload)
+        key = ref['name']
+        # Update ID inside the object
+        db_path.child(key).update({"id": key})
+        
+        if isinstance(message, Message):
+            await message.reply_text(f"✅ **Uploaded to {loc_text}**\n📂 `{name}`")
+        else:
+            await message.edit_text(f"✅ **Uploaded to {loc_text}**\n📂 `{name}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Upload More", callback_data="fb_back_dash")]]))
+            
+    except Exception as e:
+        err_text = f"❌ Error: {e}"
+        if isinstance(message, Message): await message.reply(err_text)
+        else: await message.edit_text(err_text)
+
+# --- 8. Creation & Renaming Logic ---
+
+@Client.on_callback_query(filters.regex("^fb_ask_rename"))
+async def ask_rename(bot, query: CallbackQuery):
+    user_session[query.from_user.id]["state"] = "awaiting_rename"
+    await query.message.edit_text("✏️ Send new name:")
+
+@Client.on_callback_query(filters.regex("^fb_create_mod"))
+async def ask_create_mod(bot, query: CallbackQuery):
+    user_session[query.from_user.id]["state"] = "awaiting_create_mod"
+    await query.message.edit_text("🆕 Send **Module Name**:")
+
+@Client.on_callback_query(filters.regex("^fb_create_sub_ask"))
+async def ask_create_sub(bot, query: CallbackQuery):
+    user_session[query.from_user.id]["state"] = "awaiting_create_sub"
+    await query.message.edit_text(f"🆕 Send **Sub-Module Name** for `{user_session[query.from_user.id]['mod']}`:")
 
 @Client.on_callback_query(filters.regex("^fb_back_dash"))
 async def back_to_dash(bot, query: CallbackQuery):
-    type_name = "Sub-Module" if user_session[query.from_user.id]["is_sub_module"] else "Main Module"
-    await show_dashboard(bot, query, type_name)
-
-@Client.on_callback_query(filters.regex("^fb_del_item_"))
-async def delete_item(bot, query: CallbackQuery):
-    key = query.data.split("_")[3]
     user_id = query.from_user.id
-    cat = user_session[user_id]["cat_id"]
-    batch = user_session[user_id]["batch_id"]
-    mod = user_session[user_id]["module_id"]
-    
-    if user_session[user_id]["is_sub_module"]:
-        sub_mod = user_session[user_id]["sub_mod_id"]
-        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod).child("lectures")
-    else:
-        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures")
-        
-    path.child(key).remove()
-    await query.answer("🗑 Deleted!", show_alert=True)
-    await manage_content_list(bot, query) # Refresh
-
-# --- File Handler (THE CORE LOGIC) ---
-
-@Client.on_message((filters.video | filters.document) & filters.user(ADMINS))
-async def incoming_file_handler(bot, message):
-    user_id = message.from_user.id
-    
-    # Check if active
-    if user_session.get(user_id, {}).get("state") != "active_firebase":
-        stream_link, clean_name, _ = await get_stream_link(message)
-        if stream_link:
-            await message.reply_text(f"✅ **Link:**\n`{stream_link}`\n\nSelect a Module to add this.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Open Panel", callback_data="fb_cat_list")]]))
-        return
-
-    # Generate Link
-    stream_link, clean_name, log_id = await get_stream_link(message)
-    if not stream_link: return await message.reply("Error generating link.")
-    
-    # Determine Path Logic
-    cat = user_session[user_id]["cat_id"]
-    batch = user_session[user_id]["batch_id"]
-    mod = user_session[user_id]["module_id"]
-    
-    # === CRITICAL: PATH SELECTION ===
-    if user_session[user_id]["is_sub_module"]:
-        sub_mod = user_session[user_id]["sub_mod_id"]
-        # Path: Modules -> SubModules -> {ID}
-        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod)
-    else:
-        # Path: Modules -> {ID}
-        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod)
-
-    # FAST MODE UPLOAD
-    if user_session[user_id].get("fast_mode"):
-        def_type = user_session[user_id]["default_type"]
-        target = "lectures" if def_type == "lec" else "resources"
-        ts = int(time.time() * 1000)
-        
-        path = base_path.child(target)
-        # Pushing data
-        ref = path.push({"name": clean_name, "link": stream_link, "order": ts})
-        key = ref['name']
-        path.child(key).update({"id": key})
-        
-        loc_txt = "Sub-Module" if user_session[user_id]["is_sub_module"] else "Main Module"
-        await message.reply_text(f"⚡ **Added to {loc_txt} ({target}):**\n`{clean_name}`")
-        return
-
-    # NORMAL MODE (Ask Name/Type)
-    user_session[user_id]["temp_data"] = {"title": clean_name, "url": stream_link}
-    buttons = [
-        [InlineKeyboardButton("✅ Add (Keep Name)", callback_data="fb_name_keep")], 
-        [InlineKeyboardButton("✏️ Rename", callback_data="fb_name_rename")], 
-        [InlineKeyboardButton("❌ Cancel", callback_data="fb_back_dash")]
-    ]
-    await message.reply_text(f"📂 **File Ready:** `{clean_name}`\nRename or Add?", reply_markup=InlineKeyboardMarkup(buttons))
-
-# --- Text Handler (Rename & Create) ---
+    target = "Sub-Module" if user_session[user_id]["is_sub"] else "Main Module"
+    await refresh_dashboard(bot, query.message, user_id, target)
 
 @Client.on_message(filters.text & filters.user(ADMINS))
-async def handle_text(bot, message):
+async def text_handler(bot, message):
     user_id = message.from_user.id
     if user_id not in user_session: return
-    state = user_session[user_id].get("state", "")
+    state = user_session[user_id].get("state")
+    text = message.text.strip()
     
-    # 1. Rename
-    if state == "waiting_for_name":
-        new_name = message.text.strip()
-        user_session[user_id]["temp_data"]["title"] = new_name
-        user_session[user_id]["state"] = "active_firebase"
-        await ask_file_type(message, new_name, user_session[user_id]["temp_data"]["url"], user_session[user_id])
-        
-    # 2. Create Module
-    elif state == "waiting_mod_creation":
-        mod_name = message.text.strip()
-        cat = user_session[user_id]["cat_id"]
-        batch = user_session[user_id]["batch_id"]
-        ts = int(time.time() * 1000)
-        
+    # Rename File
+    if state == "awaiting_rename":
+        user_session[user_id]["temp"]["name"] = text
+        user_session[user_id]["state"] = "active"
+        await message.reply_text(f"✅ Renamed to: `{text}`", 
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎬 As Lecture", callback_data="fb_confirm_lectures")],
+                [InlineKeyboardButton("📄 As Resource", callback_data="fb_confirm_resources")]
+            ]))
+
+    # Create Module
+    elif state == "awaiting_create_mod":
+        cat, batch = user_session[user_id]["cat"], user_session[user_id]["batch"]
         path = db.child("categories").child(cat).child("batches").child(batch).child("modules")
-        ref = path.push({"name": mod_name, "order": ts})
-        key = ref['name']
-        path.child(key).update({"id": key})
+        ts = int(time.time() * 1000)
+        ref = path.push({"name": text, "order": ts})
+        path.child(ref['name']).update({"id": ref['name']})
         
-        await message.reply_text(f"✅ Module Created: {mod_name}")
+        await message.reply_text(f"✅ Module `{text}` created!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Batch", callback_data=f"fb_sel_batch_{batch}")]]))
         user_session[user_id]["state"] = "idle"
 
-    # 3. Create Sub-Module
-    elif state == "waiting_submod_creation":
-        sub_name = message.text.strip()
-        cat = user_session[user_id]["cat_id"]
-        batch = user_session[user_id]["batch_id"]
-        mod = user_session[user_id]["module_id"]
+    # Create Sub-Module
+    elif state == "awaiting_create_sub":
+        cat, batch, mod = user_session[user_id]["cat"], user_session[user_id]["batch"], user_session[user_id]["mod"]
+        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules")
         ts = int(time.time() * 1000)
         
-        # Creating SubModule with isSubModule: true flag
-        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules")
-        ref = path.push({"name": sub_name, "order": ts, "isSubModule": True})
-        key = ref['name']
-        path.child(key).update({"id": key})
+        # Structure as per image: isSubModule: true
+        ref = path.push({"name": text, "order": ts, "isSubModule": True})
+        path.child(ref['name']).update({"id": ref['name']})
         
-        await message.reply_text(f"✅ **Sub-Module Created:** {sub_name}\nGo back to list to see it.")
+        await message.reply_text(f"✅ Sub-Module `{text}` created!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Module", callback_data=f"fb_mod_menu_{mod}")]]))
         user_session[user_id]["state"] = "idle"
-
-# --- Common Callbacks ---
-
-@Client.on_callback_query(filters.regex("^fb_name_keep"))
-async def keep_default_name(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    data = user_session[user_id]["temp_data"]
-    await ask_file_type(query.message, data["title"], data["url"], user_session[user_id])
-
-@Client.on_callback_query(filters.regex("^fb_name_rename"))
-async def ask_for_rename_manual(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    user_session[user_id]["state"] = "waiting_for_name"
-    await query.message.edit_text("✏️ New Name likho:")
-
-async def ask_file_type(message, title, url, session):
-    buttons = [[InlineKeyboardButton("🎬 Lecture", callback_data="fb_confirm_lec"), InlineKeyboardButton("📄 Resource", callback_data="fb_confirm_res")]]
-    await message.reply_text(f"📌 Confirm:\nName: {title}", reply_markup=InlineKeyboardMarkup(buttons))
-
-@Client.on_callback_query(filters.regex("^fb_confirm_"))
-async def push_firebase_manual(bot, query: CallbackQuery):
-    action = query.data.split("_")[2]
-    user_id = query.from_user.id
-    data = user_session[user_id]["temp_data"]
-    
-    cat = user_session[user_id]["cat_id"]
-    batch = user_session[user_id]["batch_id"]
-    mod = user_session[user_id]["module_id"]
-    
-    target = "lectures" if action == "lec" else "resources"
-    ts = int(time.time() * 1000)
-    entry = {"name": data["title"], "link": data["url"], "order": ts}
-    
-    try:
-        # Determine Path
-        if user_session[user_id]["is_sub_module"]:
-            sub_mod = user_session[user_id]["sub_mod_id"]
-            # Saving inside Sub-Module > lectures/resources
-            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod).child(target)
-        else:
-            # Saving inside Main Module > lectures/resources
-            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
-            
-        ref = path.push(entry)
-        key = ref['name']
-        path.child(key).update({"id": key})
-        
-        await query.message.edit_text(f"✅ **Added Successfully!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Upload More", callback_data="fb_back_dash")]]))
-    except Exception as e:
-        await query.message.edit_text(f"Error: {e}")
-
-# --- Creators ---
-
-@Client.on_callback_query(filters.regex("^fb_create_mod"))
-async def create_mod_trig(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    user_session[user_id]["state"] = "waiting_mod_creation"
-    await query.message.edit_text("🆕 Enter Module Name:")
-
-@Client.on_callback_query(filters.regex("^fb_create_submod_ask"))
-async def create_submod_trig(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    user_session[user_id]["state"] = "waiting_submod_creation"
-    await query.message.edit_text(f"🆕 Enter Sub-Module Name:\n(Creating inside Module: {user_session[user_id]['module_id']})")

@@ -60,7 +60,7 @@ def get_name(data):
 @Client.on_message(filters.command("firebase") & filters.user(ADMINS))
 async def firebase_panel(bot, message):
     user_id = message.from_user.id
-    # Reset Session completely
+    # Reset Session
     user_session[user_id] = {
         "state": "idle", 
         "fast_mode": False, 
@@ -68,11 +68,12 @@ async def firebase_panel(bot, message):
         "cat_id": None,
         "batch_id": None,
         "module_id": None,
-        "sub_mod_id": None
+        "sub_mod_id": None,
+        "sub_mod_section": None # 'lectures' or 'resources' (Parent section where submod lives)
     }
     
     await message.reply_text(
-        "**🔥 Firebase Admin Panel**\n\nDatabase Connected!\nSelect a Category to start:",
+        "**🔥 Firebase Admin Panel (Website Synced)**\n\nDatabase Connected!\nSelect a Category to start:",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📂 Select Category", callback_data="fb_cat_list")],
             [InlineKeyboardButton("⚙️ Switch Mode (File/URL)", callback_data="fb_mode_menu")]
@@ -156,23 +157,22 @@ async def list_modules(bot, query: CallbackQuery):
     except Exception as e:
          await query.message.edit_text(f"Error: {e}")
 
-# --- 4. Module Menu & Sub-Module Logic ---
+# --- 4. Module Menu & Sub-Module Logic (ADMIN PANEL STYLE) ---
 
 @Client.on_callback_query(filters.regex("^fb_mod_menu_"))
 async def module_menu_handler(bot, query: CallbackQuery):
     module_id = query.data.split("_")[3]
     user_id = query.from_user.id
     
-    # LOCK MODULE ID
     user_session[user_id]["module_id"] = str(module_id)
-    # RESET SUBMODULE STATE
     user_session[user_id]["is_sub_module"] = False 
     user_session[user_id]["sub_mod_id"] = None
+    user_session[user_id]["sub_mod_section"] = None
     
     buttons = [
         [InlineKeyboardButton("✅ Select This Module", callback_data=f"fb_set_final_main")],
         [InlineKeyboardButton("📂 Show Sub-Modules", callback_data=f"fb_list_submod")],
-        [InlineKeyboardButton("➕ Create Sub-Module", callback_data=f"fb_create_submod_ask")],
+        [InlineKeyboardButton("➕ Create Sub-Module", callback_data=f"fb_pre_create_submod")],
         [InlineKeyboardButton("🔙 Back to Modules", callback_data=f"fb_sel_batch_{user_session[user_id]['batch_id']}")]
     ]
     
@@ -186,27 +186,39 @@ async def list_sub_modules(bot, query: CallbackQuery):
     mod_id = user_session[user_id]["module_id"]
     
     try:
-        # Strict Path: subModules is INSIDE the module
-        sub_mods = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod_id).child("subModules").get().val()
+        # According to HTML: Submodules are inside 'lectures' or 'resources' with isSubModule: true
+        base_mod_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod_id)
+        
+        # Fetch both sections
+        lec_data = base_mod_path.child("lectures").get().val() or {}
+        res_data = base_mod_path.child("resources").get().val() or {}
+        
         buttons = []
         
-        if sub_mods and isinstance(sub_mods, dict):
-            for key, val in sub_mods.items():
-                # PASSING KEY IS CRITICAL
-                buttons.append([InlineKeyboardButton(f"📑 {get_name(val)}", callback_data=f"fb_set_submod_{key}")])
+        # Scan Lectures for Submodules
+        if isinstance(lec_data, dict):
+            for key, val in lec_data.items():
+                if val.get("isSubModule") is True:
+                     buttons.append([InlineKeyboardButton(f"📁 (Lec) {get_name(val)}", callback_data=f"fb_set_submod_lectures_{key}")])
+                     
+        # Scan Resources for Submodules
+        if isinstance(res_data, dict):
+            for key, val in res_data.items():
+                if val.get("isSubModule") is True:
+                     buttons.append([InlineKeyboardButton(f"📁 (Res) {get_name(val)}", callback_data=f"fb_set_submod_resources_{key}")])
         
         if not buttons:
-            buttons.append([InlineKeyboardButton("🚫 No Sub-Modules", callback_data="ignore")])
+            buttons.append([InlineKeyboardButton("🚫 No Sub-Modules Found", callback_data="ignore")])
             
-        buttons.append([InlineKeyboardButton("➕ Create Sub-Module", callback_data="fb_create_submod_ask")])
+        buttons.append([InlineKeyboardButton("➕ Create Sub-Module", callback_data="fb_pre_create_submod")])
         buttons.append([InlineKeyboardButton("🔙 Back to Menu", callback_data=f"fb_mod_menu_{mod_id}")])
         
-        await query.message.edit_text(f"**📂 Sub-Modules inside `{mod_id}`**", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**📂 Sub-Modules inside `{mod_id}`**\n(Folders found in Lectures/Resources tabs)", reply_markup=InlineKeyboardMarkup(buttons))
         
     except Exception as e:
         await query.message.edit_text(f"Error loading Sub-modules: {e}")
 
-# --- 5. Set Active Target (Main or Sub) ---
+# --- 5. Set Active Target ---
 
 @Client.on_callback_query(filters.regex("^fb_set_final_main"))
 async def set_main_module_active(bot, query: CallbackQuery):
@@ -217,12 +229,15 @@ async def set_main_module_active(bot, query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex("^fb_set_submod_"))
 async def set_sub_module_active(bot, query: CallbackQuery):
-    # EXTRACT SUBMODULE ID CAREFULLY
-    sub_mod_id = query.data.split("_")[3]
-    user_id = query.from_user.id
+    # Data format: fb_set_submod_{SECTION}_{KEY}
+    parts = query.data.split("_")
+    section = parts[3] # lectures or resources
+    sub_mod_id = parts[4]
     
+    user_id = query.from_user.id
     user_session[user_id]["is_sub_module"] = True
-    user_session[user_id]["sub_mod_id"] = str(sub_mod_id) # Ensure String
+    user_session[user_id]["sub_mod_section"] = section
+    user_session[user_id]["sub_mod_id"] = str(sub_mod_id)
     
     await show_dashboard(bot, query, "Sub-Module")
 
@@ -237,9 +252,10 @@ async def show_dashboard(bot, query, type_name):
     fast_status = "🟢 ON" if is_fast else "🔴 OFF"
     fast_text = "⚡ Disable Fast Mode" if is_fast else "⚡ Enable Fast Mode"
     
-    # Debugging Text for You
+    location_text = ""
     if user_session[user_id]["is_sub_module"]:
-        location_text = f"📂 **Main Module:** `{mod_id}`\n📑 **SUB-MODULE:** `{sub_id}` (Active)"
+        sec = user_session[user_id]["sub_mod_section"]
+        location_text = f"📂 **Main Module:** `{mod_id}`\n↳ 📁 **Parent Tab:** `{sec}`\n   ↳ 📑 **SUB-MODULE:** `{sub_id}`"
     else:
         location_text = f"📂 **MAIN MODULE:** `{mod_id}` (Active)"
         
@@ -247,7 +263,7 @@ async def show_dashboard(bot, query, type_name):
         f"✅ **Target Locked!**\n\n"
         f"{location_text}\n\n"
         f"⚡ **Fast Mode:** {fast_status}\n"
-        f"⬇️ **Send Files Now (Lectures/PDFs)**"
+        f"⬇️ **Send Files Now**"
     )
     
     buttons = [
@@ -258,7 +274,7 @@ async def show_dashboard(bot, query, type_name):
     
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- Feature: Manage Content (List/Del) ---
+# --- Feature: Manage Content ---
 @Client.on_callback_query(filters.regex("^fb_manage_idx"))
 async def manage_content_list(bot, query: CallbackQuery):
     user_id = query.from_user.id
@@ -266,27 +282,29 @@ async def manage_content_list(bot, query: CallbackQuery):
     batch = user_session[user_id]["batch_id"]
     mod = user_session[user_id]["module_id"]
     
-    # STRICT PATH SELECTION
+    # Logic matching HTML recursion
     if user_session[user_id]["is_sub_module"]:
         sub_mod = user_session[user_id]["sub_mod_id"]
-        # Path: modules -> {mod} -> subModules -> {sub_mod}
-        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod)
+        section = user_session[user_id]["sub_mod_section"]
+        # Path: modules -> {mod} -> {section} -> {sub_mod}
+        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(section).child(sub_mod)
     else:
-        # Path: modules -> {mod}
         base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod)
     
     try:
+        # Show lectures inside the target
         lectures_data = base_path.child("lectures").get().val()
         buttons = []
         
         if lectures_data and isinstance(lectures_data, dict):
             for key, val in lectures_data.items():
-                buttons.append([InlineKeyboardButton(f"🗑 {get_name(val)}", callback_data=f"fb_del_item_{key}")])
+                if not val.get("isSubModule"): # Don't show nested submodules here, only files
+                    buttons.append([InlineKeyboardButton(f"🗑 {get_name(val)}", callback_data=f"fb_del_item_{key}")])
         
         type_name = "Sub-Module" if user_session[user_id]["is_sub_module"] else "Main Module"
         buttons.append([InlineKeyboardButton("🔙 Back to Upload", callback_data="fb_back_dash")])
         
-        await query.message.edit_text(f"**🗑 Delete Content from {type_name}**", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text(f"**🗑 Delete Lectures from {type_name}**", reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
         await query.message.edit_text(f"Error: {e}")
 
@@ -305,7 +323,8 @@ async def delete_item(bot, query: CallbackQuery):
     
     if user_session[user_id]["is_sub_module"]:
         sub_mod = user_session[user_id]["sub_mod_id"]
-        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod).child("lectures")
+        section = user_session[user_id]["sub_mod_section"]
+        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(section).child(sub_mod).child("lectures")
     else:
         path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures")
         
@@ -313,6 +332,7 @@ async def delete_item(bot, query: CallbackQuery):
     await query.answer("🗑 Deleted!", show_alert=True)
     await manage_content_list(bot, query)
 
+# --- Feature: Fast Mode ---
 @Client.on_callback_query(filters.regex("^fb_toggle_fast"))
 async def toggle_fast_mode(bot, query: CallbackQuery):
     user_id = query.from_user.id
@@ -337,16 +357,14 @@ async def set_fast_type(bot, query: CallbackQuery):
     type_name = "Sub-Module" if user_session[user_id]["is_sub_module"] else "Main Module"
     await show_dashboard(bot, query, type_name)
 
-# --- File Handler (FIXED PATH LOGIC) ---
+# --- File Handler (CORRECTED ADMIN PANEL LOGIC) ---
 @Client.on_message((filters.video | filters.document) & filters.user(ADMINS))
 async def incoming_file_handler(bot, message):
     user_id = message.from_user.id
     
-    # Check Active State
     if user_session.get(user_id, {}).get("state") != "active_firebase":
         return
 
-    # Generate Link
     stream_link, clean_name, log_id = await get_stream_link(message)
     if not stream_link: return await message.reply("Error generating link.")
 
@@ -355,20 +373,19 @@ async def incoming_file_handler(bot, message):
     batch = user_session[user_id]["batch_id"]
     mod = user_session[user_id]["module_id"]
     
-    # 2. DETERMINE BASE PATH (CRITICAL FIX)
+    # 2. DETERMINE PATH
+    # HTML Logic: Content goes into the 'lectures' or 'resources' folder OF the target object
     if user_session[user_id]["is_sub_module"]:
         sub_mod = user_session[user_id]["sub_mod_id"]
-        # Validation
-        if not sub_mod or sub_mod == "None":
-            return await message.reply("❌ **Error:** Sub-Module ID is invalid. Please select sub-module again.")
+        section = user_session[user_id]["sub_mod_section"]
         
-        # Path: categories/ID/batches/ID/modules/ID/subModules/ID
-        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod)
-        location_msg = f"Inside Sub-Module: `{sub_mod}`"
+        # Path: modules/{mod}/{section}/{sub_mod}
+        base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(section).child(sub_mod)
+        location_msg = f"Inside Sub-Module (`{sub_mod}`)"
     else:
-        # Path: categories/ID/batches/ID/modules/ID
+        # Path: modules/{mod}
         base_path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod)
-        location_msg = f"Inside Main Module: `{mod}`"
+        location_msg = f"Inside Main Module (`{mod}`)"
 
     # FAST MODE UPLOAD
     if user_session[user_id].get("fast_mode"):
@@ -381,10 +398,10 @@ async def incoming_file_handler(bot, message):
         key = ref['name']
         path.child(key).update({"id": key})
         
-        await message.reply_text(f"⚡ **Added Successfully!**\n{location_msg}\n📁 Type: {target}\n📄 Name: {clean_name}")
+        await message.reply_text(f"⚡ **Added!**\n{location_msg} -> {target}\n📁 {clean_name}")
         return
 
-    # NORMAL MODE (Ask Name)
+    # NORMAL MODE
     user_session[user_id]["temp_data"] = {"title": clean_name, "url": stream_link}
     
     buttons = [
@@ -393,15 +410,14 @@ async def incoming_file_handler(bot, message):
         [InlineKeyboardButton("❌ Cancel", callback_data="fb_back_dash")]
     ]
     
-    # SHOW PATH TO USER FOR CONFIRMATION
     await message.reply_text(
         f"📂 **File Ready:** `{clean_name}`\n\n"
-        f"📍 **Uploading To:**\n{location_msg}\n\n"
+        f"📍 **Location:** {location_msg}\n"
         f"Rename or Add?", 
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# --- Text Handler ---
+# --- Text Handler (Creation & Rename) ---
 @Client.on_message(filters.text & filters.user(ADMINS))
 async def handle_text(bot, message):
     user_id = message.from_user.id
@@ -430,24 +446,30 @@ async def handle_text(bot, message):
         await message.reply_text(f"✅ Module Created: `{key}`")
         user_session[user_id]["state"] = "idle"
 
-    # 3. Create Sub-Module
+    # 3. Create Sub-Module (MATCHING HTML LOGIC)
     elif state == "waiting_submod_creation":
         sub_name = message.text.strip()
         cat = user_session[user_id]["cat_id"]
         batch = user_session[user_id]["batch_id"]
         mod = user_session[user_id]["module_id"]
+        target_section = user_session[user_id]["sub_mod_create_target"] # 'lectures' or 'resources'
+        
         ts = int(time.time() * 1000)
         
-        # Explicit Path: Ensure it goes inside the SELECTED module
-        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules")
+        # HTML Logic: Submodule is an item inside 'lectures' or 'resources' with isSubModule=true
+        path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target_section)
+        
         ref = path.push({"name": sub_name, "order": ts, "isSubModule": True})
         key = ref['name']
         path.child(key).update({"id": key})
         
-        await message.reply_text(f"✅ **Sub-Module Created!**\nName: {sub_name}\nID: `{key}`\n\nGo back to 'Show Sub-Modules' to select it.")
+        await message.reply_text(
+            f"✅ **Sub-Module Created!**\nName: {sub_name}\nLocation: Inside `{target_section}` list.\n\nGo to 'Show Sub-Modules' to select it."
+        )
         user_session[user_id]["state"] = "idle"
 
-# --- Confirmation Callbacks ---
+# --- Callbacks ---
+
 @Client.on_callback_query(filters.regex("^fb_name_keep"))
 async def keep_default_name(bot, query: CallbackQuery):
     user_id = query.from_user.id
@@ -462,7 +484,7 @@ async def ask_for_rename_manual(bot, query: CallbackQuery):
 
 async def ask_file_type(message, title, url, session):
     buttons = [[InlineKeyboardButton("🎬 Lecture", callback_data="fb_confirm_lec"), InlineKeyboardButton("📄 Resource", callback_data="fb_confirm_res")]]
-    await message.reply_text(f"📌 **Confirm Type:**\nName: `{title}`", reply_markup=InlineKeyboardMarkup(buttons))
+    await message.reply_text(f"📌 **Type Select Karo:**\nName: `{title}`", reply_markup=InlineKeyboardMarkup(buttons))
 
 @Client.on_callback_query(filters.regex("^fb_confirm_"))
 async def push_firebase_manual(bot, query: CallbackQuery):
@@ -479,12 +501,12 @@ async def push_firebase_manual(bot, query: CallbackQuery):
     entry = {"name": data["title"], "link": data["url"], "order": ts}
     
     try:
-        # STRICT PATH CONSTRUCTION
+        # PATH CONSTRUCTION (Matches HTML)
         if user_session[user_id]["is_sub_module"]:
             sub_mod = user_session[user_id]["sub_mod_id"]
-            if not sub_mod: return await query.message.edit_text("❌ Error: ID Lost.")
-            
-            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("subModules").child(sub_mod).child(target)
+            section = user_session[user_id]["sub_mod_section"]
+            # modules -> mod -> section -> sub_mod -> target(lectures/resources)
+            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(section).child(sub_mod).child(target)
         else:
             path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
             
@@ -492,22 +514,32 @@ async def push_firebase_manual(bot, query: CallbackQuery):
         key = ref['name']
         path.child(key).update({"id": key})
         
-        await query.message.edit_text(f"✅ **Uploaded Successfully!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Upload More", callback_data="fb_back_dash")]]))
+        await query.message.edit_text(f"✅ **Uploaded!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Upload More", callback_data="fb_back_dash")]]))
     except Exception as e:
         await query.message.edit_text(f"Error: {e}")
+
+# --- Submodule Creation Selection ---
+@Client.on_callback_query(filters.regex("^fb_pre_create_submod"))
+async def pre_create_submod(bot, query: CallbackQuery):
+    # Ask user WHERE to create the folder (Lectures tab or Resources tab) - Matches HTML Radio buttons
+    buttons = [
+        [InlineKeyboardButton("Video/Lectures Tab", callback_data="fb_create_sub_in_lectures")],
+        [InlineKeyboardButton("Notes/Resources Tab", callback_data="fb_create_sub_in_resources")]
+    ]
+    await query.message.edit_text("📂 **Sub-Module Kaha Banana Hai?**\n(Parent Module ke kis section mein folder dikhana hai?)", reply_markup=InlineKeyboardMarkup(buttons))
+
+@Client.on_callback_query(filters.regex("^fb_create_sub_in_"))
+async def trigger_submod_creation(bot, query: CallbackQuery):
+    target = query.data.split("_")[4] # lectures or resources
+    user_id = query.from_user.id
+    
+    user_session[user_id]["state"] = "waiting_submod_creation"
+    user_session[user_id]["sub_mod_create_target"] = target
+    
+    await query.message.edit_text(f"🆕 **Creating Sub-Module in `{target}`**\n\nNaam likh ke bhejo:")
 
 @Client.on_callback_query(filters.regex("^fb_create_mod"))
 async def create_mod_trig(bot, query: CallbackQuery):
     user_id = query.from_user.id
     user_session[user_id]["state"] = "waiting_mod_creation"
     await query.message.edit_text("🆕 **Enter Module Name:**")
-
-@Client.on_callback_query(filters.regex("^fb_create_submod_ask"))
-async def create_submod_trig(bot, query: CallbackQuery):
-    user_id = query.from_user.id
-    mod_id = user_session[user_id].get("module_id")
-    if not mod_id:
-        return await query.message.edit_text("❌ Error: Module not selected.")
-        
-    user_session[user_id]["state"] = "waiting_submod_creation"
-    await query.message.edit_text(f"🆕 **Creating Sub-Module** inside `{mod_id}`\nEnter Name:")

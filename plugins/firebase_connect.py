@@ -12,7 +12,7 @@ from Crypto.Random import get_random_bytes
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
-# --- FIX: Imports split into separate lines (Ye sahi tareeka hai) ---
+# --- FIX: Ye alag lines par kar diya hai ---
 from info import * import pyrebase
 
 # --- 1. Security Configuration (SECRET KEY) ---

@@ -4,18 +4,19 @@ import urllib.parse
 import time
 import base64
 
-# --- New Security Imports ---
+# --- Security Imports ---
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 from Crypto.Random import get_random_bytes
 
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+
+# --- FIX: Imports split into separate lines ---
 from info import * import pyrebase
 
 # --- 1. Security Configuration (SECRET KEY) ---
-# DHYAAN DEIN: Ye Key WAHI honi chahiye jo Website par decrypt ke liye use hogi.
-# Issey change karke apni 32-character key dalein.
+# Ensure this matches your website .env key
 SECRET_KEY = b"12345678901234567890123456789012" 
 
 # --- 2. Firebase Configuration ---
@@ -30,8 +31,12 @@ firebaseConfig = {
     "measurementId": "G-PCH99BDF1S"
 }
 
-firebase = pyrebase.initialize_app(firebaseConfig)
-db = firebase.database()
+# Firebase Initialize
+try:
+    firebase = pyrebase.initialize_app(firebaseConfig)
+    db = firebase.database()
+except Exception as e:
+    print(f"Firebase Init Error: {e}")
 
 # Session Structure
 user_session = {}
@@ -54,7 +59,7 @@ def encrypt_link(url):
         return f"{iv_base64}:{encrypted_base64}"
     except Exception as e:
         print(f"Encryption Error: {e}")
-        return url # Fallback to normal if error (Safety)
+        return url 
 
 async def get_stream_link(message: Message):
     """Generates Direct Link & Cleans Filename"""
@@ -72,7 +77,6 @@ async def get_stream_link(message: Message):
         name_without_ext = os.path.splitext(file_name)[0]
         clean_name = name_without_ext.replace("_", " ").replace("-", " ")
         
-        # Safe filename for URL
         safe_filename = urllib.parse.quote_plus(file_name)
         stream_link = f"{STREAM_URL}/dl/{log_msg.id}/{safe_filename}"
         
@@ -189,7 +193,6 @@ async def set_active_module(bot, query: CallbackQuery):
     module_name = data_parts[1] if len(data_parts) > 1 else "Unknown"
     
     user_id = query.from_user.id
-    # Reset queue when entering module
     user_session[user_id].update({
         "module_id": module_id,
         "mod_name": module_name,
@@ -213,21 +216,18 @@ async def set_active_module(bot, query: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# --- FAST MODE QUEUE LOGIC (WITH ENCRYPTION) ---
+# --- FAST MODE QUEUE LOGIC ---
 
 async def process_queue(bot, user_id):
-    """Processes collected files in strict order"""
     await asyncio.sleep(4) 
     
     if user_id not in user_session or not user_session[user_id]["queue"]:
         user_session[user_id]["queue_running"] = False
         return
 
-    # 1. Sort queue by Message ID
     queue = sorted(user_session[user_id]["queue"], key=lambda x: x.id)
     total_files = len(queue)
     
-    # 2. Status Message
     status_msg = await bot.send_message(user_id, f"🔄 **Processing Batch...**\nFound {total_files} files.")
     
     cat = user_session[user_id]["cat_id"]
@@ -239,7 +239,6 @@ async def process_queue(bot, user_id):
     count = 0
     uploaded_names = []
     
-    # 3. Process Sorted List
     for msg in queue:
         count += 1
         try:
@@ -251,16 +250,10 @@ async def process_queue(bot, user_id):
             if not stream_link:
                 continue
 
-            # --- ENCRYPTION STEP ---
             encrypted_link = encrypt_link(stream_link)
-            # -----------------------
-
             ts = int(time.time() * 1000)
             
-            # Push to Firebase
             path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
-            
-            # Save Encrypted Link instead of Raw Link
             ref = path.push({"name": clean_name, "link": encrypted_link, "order": ts})
             
             key = ref['name']
@@ -270,7 +263,6 @@ async def process_queue(bot, user_id):
         except Exception as e:
             print(f"Failed to upload: {e}")
 
-    # 4. Clear Queue and Final Status
     user_session[user_id]["queue"] = []
     user_session[user_id]["queue_running"] = False
     
@@ -283,8 +275,6 @@ async def process_queue(bot, user_id):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Close", callback_data="fb_hide_msg")]])
     )
 
-# --- File Handler (Modified) ---
-
 @Client.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMINS))
 async def incoming_file_handler(bot, message):
     user_id = message.from_user.id
@@ -293,7 +283,6 @@ async def incoming_file_handler(bot, message):
     
     if session.get("state") != "active_firebase": return
 
-    # FAST MODE: Add to Queue
     if session.get("fast_mode"):
         if "queue" not in session: session["queue"] = []
         session["queue"].append(message)
@@ -303,13 +292,11 @@ async def incoming_file_handler(bot, message):
             asyncio.create_task(process_queue(bot, user_id))
         return
 
-    # NORMAL MODE (One by one)
     msg = await message.reply("🔄 **Processing...**")
     stream_link, clean_name = await get_stream_link(message)
     
     if not stream_link: return await msg.edit("❌ Error.")
     
-    # Store raw link in temp for now, we encrypt when user confirms
     session["temp_data"] = {"title": clean_name, "url": stream_link}
     
     buttons = [
@@ -318,8 +305,6 @@ async def incoming_file_handler(bot, message):
         [InlineKeyboardButton("❌ Cancel", callback_data="fb_clear_temp")]
     ]
     await msg.edit(f"📂 **File:** `{clean_name}`\nProceed?", reply_markup=InlineKeyboardMarkup(buttons))
-
-# --- Other Features ---
 
 @Client.on_callback_query(filters.regex("^fb_toggle_fast"))
 async def toggle_fast_mode(bot, query: CallbackQuery):
@@ -351,8 +336,6 @@ async def set_fast_type(bot, query: CallbackQuery):
     query.data = f"fb_set_mod_{mod_id}|{mod_name}"
     await set_active_module(bot, query)
 
-# --- Standard Handlers (Rename, Text, Manage) ---
-
 @Client.on_message(filters.text & filters.user(ADMINS))
 async def handle_text(bot, message):
     user_id = message.from_user.id
@@ -364,10 +347,7 @@ async def handle_text(bot, message):
         key = state.split("_")[2]
         new_name = message.text.strip()
         cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
-        
-        # Note: We only update name here, link remains encrypted
         db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures").child(key).update({"name": new_name})
-        
         await message.reply_text(f"✅ Renamed to: `{new_name}`")
         user_session[user_id]["state"] = "active_firebase"
 
@@ -424,27 +404,22 @@ async def push_manual(bot, query):
     cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
     target = "lectures" if action == "lec" else "resources"
     
-    # --- ENCRYPTION STEP ---
     encrypted_link = encrypt_link(data["url"])
-    # -----------------------
 
     path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
     ts = int(time.time() * 1000)
     
-    # Save Encrypted Link
     ref = path.push({"name": data["title"], "link": encrypted_link, "order": ts})
-    
     key = ref['name']
     path.child(key).update({"id": key})
     
-    await query.message.edit_text("✅ **Added & Encrypted!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Hide", callback_data="fb_hide_msg")]]))
+    await query.message.edit_text("✅ **Added & Encrypted!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Hide", callback_data="fb_hide_msg")]]) )
 
 @Client.on_callback_query(filters.regex("^fb_manage_"))
 async def manage_menu(bot, query):
     mod_id = query.data.split("_")[2]
     user_id = query.from_user.id
     cat, batch = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"]
-    
     try:
         data = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod_id).child("lectures").get().val()
         buttons = []
@@ -453,7 +428,6 @@ async def manage_menu(bot, query):
             for key, val in iterator:
                 if val:
                     buttons.append([InlineKeyboardButton(f"📄 {get_name(val)}", callback_data=f"fb_item_opt_{key}")])
-        
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_set_mod_{mod_id}|")])
         await query.message.edit_text("**Manage Content:**", reply_markup=InlineKeyboardMarkup(buttons))
     except:
@@ -464,7 +438,6 @@ async def item_opt(bot, query):
     key = query.data.split("_")[3]
     user_id = query.from_user.id
     mod_id = user_session[user_id]["module_id"]
-    
     buttons = [
         [InlineKeyboardButton("Delete", callback_data=f"fb_del_{key}"), InlineKeyboardButton("Rename", callback_data=f"fb_edit_ask_{key}")],
         [InlineKeyboardButton("Back", callback_data=f"fb_manage_{mod_id}")]
@@ -476,7 +449,6 @@ async def del_item(bot, query):
     key = query.data.split("_")[2]
     user_id = query.from_user.id
     cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
-    
     db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures").child(key).remove()
     await query.answer("Deleted!")
     query.data = f"fb_manage_{mod}"

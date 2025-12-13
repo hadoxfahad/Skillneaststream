@@ -1,3 +1,5 @@
+pyrebase4
+pycryptodome
 pyrofork
 tgcrypto
 aiohttp
@@ -19,3 +21,4 @@ itsdangerous==2.0.1
 pyrebase4
 requests
 requests-toolbelt
+pycryptodome

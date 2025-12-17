@@ -9,7 +9,7 @@ import pyrebase
 
 # --- 1. CONFIGURATION ---
 
-# Apni Website ka Link yahan daalo
+# Apni Website ka Link yahan daalo (Direct Link generate karne ke liye)
 STREAM_BASE_URL = "https://skillneaststream.onrender.com" 
 
 firebaseConfig = {
@@ -83,8 +83,8 @@ async def firebase_panel(bot, message):
     txt = (
         "**🔥 Firebase Admin Panel**\n\n"
         "Database Status: 🟢 **Connected**\n"
-        "Mode: **Standard (Single DB)**\n"
-        "Feature: **Direct Stream Links**\n\n"
+        "Storage: **Msg ID + Timestamp**\n"
+        "Feature: **Direct Stream Links** (When Idle)\n\n"
         "👇 Select a Category to start:"
     )
     
@@ -226,17 +226,16 @@ async def process_queue(bot, user_id):
 
             ts_order = int(time.time() * 1000)
             timestamp = int(time.time()) # Current Time in Seconds
-            stream_link = f"{STREAM_BASE_URL}/stream/{msg_id}" # Direct URL
             
             path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
             
-            # --- SAVING EXTRA DATA (Stream URL + Timestamp) ---
+            # --- SAVING DATA (Only MSG ID + Timestamp) ---
+            # URL Hata diya hai yahan se
             ref = path.push({
                 "name": clean_name, 
                 "msg_id": msg_id, 
                 "order": ts_order,
-                "timestamp": timestamp,   # NEW
-                "stream_url": stream_link # NEW
+                "timestamp": timestamp
             })
             
             key = ref['name']
@@ -265,7 +264,7 @@ async def incoming_file_handler(bot, message):
     user_id = message.from_user.id
     
     # --- 1. DIRECT STREAM LINK GENERATOR (Bina Category Selection Ke) ---
-    # Agar user session me nahi hai, ya inactive hai, toh seedha link de do
+    # Ye tab chalega jab user FIREBASE mode me NAHI hai.
     if user_id not in user_session or user_session[user_id].get("state") != "active_firebase":
         processing_msg = await message.reply("🔄 **Generating Direct Link...**")
         
@@ -273,7 +272,7 @@ async def incoming_file_handler(bot, message):
         msg_id, clean_name = await process_file_setup(message)
         
         if msg_id:
-            # Direct URL Construct karo
+            # Direct URL Construct karo (Sirf chat me dikhane ke liye)
             stream_link = f"{STREAM_BASE_URL}/stream/{msg_id}"
             
             await processing_msg.edit(
@@ -408,19 +407,18 @@ async def push_manual(bot, query):
     
     ts_order = int(time.time() * 1000)
     timestamp = int(time.time()) # Current Time
-    stream_link = f"{STREAM_BASE_URL}/stream/{data['msg_id']}" # Link
     
     path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target) # Fixed path target
     if action == "res":
          path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("resources")
 
-    # --- SAVING EXTRA DATA ---
+    # --- SAVING DATA (Only MSG ID + Timestamp) ---
+    # URL Hata diya hai yahan se
     ref = path.push({
         "name": data["title"], 
         "msg_id": data["msg_id"], 
         "order": ts_order,
-        "timestamp": timestamp,   # NEW
-        "stream_url": stream_link # NEW
+        "timestamp": timestamp
     })
     
     key = ref['name']

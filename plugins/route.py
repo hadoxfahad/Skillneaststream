@@ -97,6 +97,23 @@ html_content = """
 async def root_route_handler(request):
     return web.Response(text=html_content, content_type='text/html')
 
+# --- NEW ROTATION ROUTE ADDED HERE (FIX FOR 404) ---
+@routes.get("/stream/{message_id}")
+async def stream_handler_rotation(request):
+    try:
+        # 1. URL se Message ID nikalo (e.g. 1054)
+        message_id = int(request.match_info['message_id'])
+        
+        # 2. Media Streamer ko call karo (Secure Hash khali rakha hai)
+        return await media_streamer(request, message_id, "")
+        
+    except ValueError:
+        return web.Response(status=400, text="Invalid Message ID (Must be a number)")
+    except Exception as e:
+        logging.error(f"Stream Error: {e}")
+        return web.Response(status=500, text="Server Error")
+# ---------------------------------------------------
+
 @routes.get(r"/{path}/{user_path}/{second}/{third}", allow_head=True)
 async def stream_handler(request: web.Request):
     try:
@@ -168,7 +185,7 @@ async def visits(request: web.Request):
     raise web.HTTPFound(link)  # Redirect to the constructed link
 
 @routes.get(r"/dl/{path:\S+}", allow_head=True)
-async def stream_handler(request: web.Request):
+async def stream_handler_legacy(request: web.Request):
     try:
         path = request.match_info["path"]
         match = re.search(r"^([a-zA-Z0-9_-]{6})(\d+)$", path)
@@ -208,6 +225,8 @@ async def media_streamer(request: web.Request, id: int, secure_hash: str):
         tg_connect = ByteStreamer(faster_client)
         class_cache[faster_client] = tg_connect
     logging.debug("before calling get_file_properties")
+    
+    # --- IMPORTANT: This function expects 'id' to be a MESSAGE ID (Integer) ---
     file_id = await tg_connect.get_file_properties(id)
     logging.debug("after calling get_file_properties")
     

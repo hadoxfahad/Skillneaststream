@@ -4,44 +4,104 @@ import urllib.parse
 import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from info import * # Ensure LOG_CHANNEL is defined here (e.g., LOG_CHANNEL = -100xxxxxxx)
+from info import * # Ensure LOG_CHANNEL is defined here
 import pyrebase
 
-# --- 1. Firebase Configuration ---
-firebaseConfig = {
-    "apiKey": "AIzaSyChwpbFb6M4HtG6zwjg0AXh7Lz9KjnrGZk",
-    "authDomain": "adminneast.firebaseapp.com",
-    "databaseURL": "https://adminneast-default-rtdb.firebaseio.com",
-    "projectId": "adminneast",
-    "storageBucket": "adminneast.firebasestorage.app",
-    "messagingSenderId": "883877553418",
-    "appId": "1:883877553418:web:84ce8200f4b471bfffc6f3",
-    "measurementId": "G-PCH99BDF1S"
-}
+# --- 1. CONFIGURATION AREA ---
 
-firebase = pyrebase.initialize_app(firebaseConfig)
-db = firebase.database()
+# Apni Website ka Link yahan daalo
+STREAM_BASE_URL = "https://skillneaststream.onrender.com" 
+
+# Yahan apne Saare Firebase Projects ki details daalo (Main + Backups)
+FIREBASE_CONFIGS = [
+    {
+        # Project 1 (Main)
+        "apiKey": "AIzaSyChwpbFb6M4HtG6zwjg0AXh7Lz9KjnrGZk",
+        "authDomain": "adminneast.firebaseapp.com",
+        "databaseURL": "https://adminneast-default-rtdb.firebaseio.com",
+        "projectId": "adminneast",
+        "storageBucket": "adminneast.firebasestorage.app",
+        "messagingSenderId": "883877553418",
+        "appId": "1:883877553418:web:84ce8200f4b471bfffc6f3",
+    },
+    # {
+    #     # Project 2 (Backup 1) - Uncomment karke details bharo
+    #     "apiKey": "...",
+    #     "databaseURL": "https://backup-1.firebaseio.com",
+    #     ...
+    # },
+    # {
+    #     # Project 3 (Backup 2) - Uncomment karke details bharo
+    #     "apiKey": "...",
+    #     "databaseURL": "https://backup-2.firebaseio.com",
+    #     ...
+    # }
+]
+
+# --- 2. MULTI-DATABASE CONNECTION ---
+all_dbs = []
+
+print("🔌 Connecting to Databases...")
+for config in FIREBASE_CONFIGS:
+    try:
+        app = pyrebase.initialize_app(config)
+        all_dbs.append(app.database())
+        print(f"✅ Connected to: {config['databaseURL']}")
+    except Exception as e:
+        print(f"❌ Failed to connect to DB {config.get('databaseURL')}: {e}")
+
+# Agar koi DB connect nahi hua toh error na aaye, isliye check
+if not all_dbs:
+    print("⚠️ CRITICAL: No Databases Connected!")
 
 # Session Structure
 user_session = {}
 
+# --- HELPER: Save to ALL Databases ---
+def save_to_all_dbs(path, data, update_id=False):
+    """
+    Ye function data ko saare connected databases me ek sath bhejega.
+    """
+    for db_instance in all_dbs:
+        try:
+            # 1. Data Push karo
+            ref = db_instance.child(path).push(data)
+            
+            # 2. Agar ID update karni hai (Firebase Structure ke liye)
+            if update_id:
+                key = ref['name']
+                db_instance.child(path).child(key).update({"id": key})
+            
+            # 3. Smart Sync ke liye Time update karo
+            current_ts = int(time.time())
+            db_instance.child("metadata").update({"last_updated": current_ts})
+            
+        except Exception as e:
+            print(f"⚠️ Error uploading to one DB: {e}")
+
+def remove_from_all_dbs(path):
+    for db_instance in all_dbs:
+        try:
+            db_instance.child(path).remove()
+        except:
+            pass
+
+def update_in_all_dbs(path, data):
+    for db_instance in all_dbs:
+        try:
+            db_instance.child(path).update(data)
+        except:
+            pass
+
 # --- Helper Functions ---
 
 async def process_file_setup(message: Message):
-    """
-    FIXED: Ab ye File ko Log Channel me forward karega aur MESSAGE ID (Number) return karega.
-    Isse 'Video Unavailable' error 100% fix ho jayega.
-    """
     try:
-        # 1. Forward to Log Channel (CRITICAL STEP)
-        # Ye line ab uncommented hai. Bot ko Log Channel me Admin bana dena.
+        # Log Channel me forward karo (Zaroori hai Link banane ke liye)
         log_msg = await message.forward(LOG_CHANNEL) 
-        
-        # 2. Get Message ID (Integer, e.g., 2045)
         msg_id = log_msg.id
         
         file_name = "Unknown File"
-        
         if message.video:
             file_name = message.video.file_name or f"Video {msg_id}.mp4"
         elif message.document:
@@ -49,23 +109,17 @@ async def process_file_setup(message: Message):
         elif message.audio:
             file_name = message.audio.file_name or f"Audio {msg_id}.mp3"
             
-        # Name Cleaning
         name_without_ext = os.path.splitext(file_name)[0]
         clean_name = name_without_ext.replace("_", " ").replace("-", " ")
         
-        # Return Integer ID and Name
         return msg_id, clean_name
-
     except Exception as e:
         print(f"Error processing file: {e}")
-        # Agar Log Channel set nahi hai ya Bot admin nahi hai toh error aayega
         return None, None
 
 def get_name(data):
-    if not data:
-        return "Unnamed"
-    if isinstance(data, dict):
-        return data.get("name") or data.get("title") or "Unnamed"
+    if not data: return "Unnamed"
+    if isinstance(data, dict): return data.get("name") or data.get("title") or "Unnamed"
     return "Unnamed"
 
 def get_breadcrumb(user_id):
@@ -82,11 +136,13 @@ async def firebase_panel(bot, message):
     user_id = message.from_user.id
     user_session[user_id] = {"state": "idle", "fast_mode": False, "queue": []}
     
+    # Read from First DB just for menu display
+    db_read = all_dbs[0] if all_dbs else None
+    
     txt = (
-        "**🔥 Firebase Admin Panel 3.0 (Fixed)**\n\n"
-        "Database Status: 🟢 **Connected**\n"
-        "Mode: **Smart Queue System**\n"
-        "Storage Type: **Message IDs** (Stable)\n\n"
+        "**🔥 Firebase Admin Panel 3.0 (Multi-DB)**\n\n"
+        f"Connected DBs: **{len(all_dbs)}**\n"
+        "Mode: **Smart Queue System**\n\n"
         "👇 Select a Category to start:"
     )
     
@@ -95,12 +151,13 @@ async def firebase_panel(bot, message):
         [InlineKeyboardButton("⚙️ Settings", callback_data="fb_mode_menu")]
     ]))
 
-# --- Navigation Handlers (No Changes Here) ---
+# --- Navigation Handlers ---
 
 @Client.on_callback_query(filters.regex("^fb_cat_list"))
 async def list_categories(bot, query: CallbackQuery):
     try:
-        cats_data = db.child("categories").get().val()
+        # Read from first DB only
+        cats_data = all_dbs[0].child("categories").get().val()
         buttons = []
         if cats_data:
             iterator = cats_data.items() if isinstance(cats_data, dict) else enumerate(cats_data)
@@ -124,7 +181,7 @@ async def list_batches(bot, query: CallbackQuery):
     user_session[user_id].update({"cat_id": cat_id, "cat_name": cat_name})
     
     try:
-        batches_data = db.child("categories").child(cat_id).child("batches").get().val()
+        batches_data = all_dbs[0].child("categories").child(cat_id).child("batches").get().val()
         buttons = []
         if batches_data:
             iterator = batches_data.items() if isinstance(batches_data, dict) else enumerate(batches_data)
@@ -149,7 +206,7 @@ async def list_modules(bot, query: CallbackQuery):
     cat_id = user_session[user_id]["cat_id"]
     
     try:
-        modules_data = db.child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get().val()
+        modules_data = all_dbs[0].child("categories").child(cat_id).child("batches").child(batch_id).child("modules").get().val()
         buttons = []
         if modules_data:
             iterator = modules_data.items() if isinstance(modules_data, dict) else enumerate(modules_data)
@@ -172,7 +229,6 @@ async def set_active_module(bot, query: CallbackQuery):
     module_name = data_parts[1] if len(data_parts) > 1 else "Unknown"
     user_id = query.from_user.id
     
-    # Reset queue when entering module
     user_session[user_id].update({
         "module_id": module_id,
         "mod_name": module_name,
@@ -196,21 +252,17 @@ async def set_active_module(bot, query: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# --- FAST MODE QUEUE LOGIC (UPDATED FOR MSG ID) ---
+# --- FAST MODE QUEUE LOGIC ---
 
 async def process_queue(bot, user_id):
-    """Processes collected files and saves Message ID (Number)"""
     await asyncio.sleep(4)
     
     if user_id not in user_session or not user_session[user_id]["queue"]:
         user_session[user_id]["queue_running"] = False
         return
 
-    # 1. Sort queue
     queue = sorted(user_session[user_id]["queue"], key=lambda x: x.id)
     total_files = len(queue)
-    
-    # 2. Status Message
     status_msg = await bot.send_message(user_id, f"🔄 **Processing Batch...**\nFound {total_files} files.")
     
     cat = user_session[user_id]["cat_id"]
@@ -222,91 +274,98 @@ async def process_queue(bot, user_id):
     count = 0
     uploaded_names = []
 
-    # 3. Process Sorted List
     for msg in queue:
         count += 1
         try:
             if count == 1 or count % 3 == 0:
-                await status_msg.edit(f"🚀 **Uploading...** ({count}/{total_files})\nDo not send more files yet.")
+                await status_msg.edit(f"🚀 **Uploading to {len(all_dbs)} Servers...** ({count}/{total_files})")
             
-            # CHANGED: Get MSG ID (Number)
             msg_id, clean_name = await process_file_setup(msg)
-            
-            if not msg_id:
-                continue
+            if not msg_id: continue
 
             ts = int(time.time() * 1000)
             
-            # CHANGED: Pushing 'msg_id'
-            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
-            ref = path.push({
+            # --- SAVE TO ALL DBs ---
+            path = f"categories/{cat}/batches/{batch}/modules/{mod}/{target}"
+            data_packet = {
                 "name": clean_name, 
-                "msg_id": msg_id, # <-- Saving Number
+                "msg_id": msg_id, 
                 "order": ts
-            })
-            
-            key = ref['name']
-            path.child(key).update({"id": key})
+            }
+            save_to_all_dbs(path, data_packet, update_id=True)
+            # -----------------------
             
             uploaded_names.append(clean_name)
             
         except Exception as e:
             print(f"Failed to upload: {e}")
 
-    # 4. Clear Queue and Final Status
     user_session[user_id]["queue"] = []
     user_session[user_id]["queue_running"] = False
     
     summary = "\n".join([f"✅ {n}" for n in uploaded_names[:5]])
-    if len(uploaded_names) > 5:
-        summary += f"\n...and {len(uploaded_names)-5} more."
+    if len(uploaded_names) > 5: summary += f"\n...and {len(uploaded_names)-5} more."
         
     await status_msg.edit(
-        f"🎉 **Batch Completed!**\n\n{summary}\n\nTotal Added: {total_files}",
+        f"🎉 **Multi-Upload Completed!**\n\n{summary}\n\nTotal Added: {total_files}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Close", callback_data="fb_hide_msg")]])
     )
 
-# --- File Handler (Modified for MSG ID) ---
+# --- FILE HANDLER (DIRECT LINK + FIREBASE) ---
 
 @Client.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMINS))
 async def incoming_file_handler(bot, message):
     user_id = message.from_user.id
-    if user_id not in user_session: return
-    session = user_session[user_id]
     
-    if session.get("state") != "active_firebase": return
+    # --- 1. DIRECT STREAM LINK GENERATOR (Bina Category Selection Ke) ---
+    # Agar user session me nahi hai, ya inactive hai, toh seedha link de do
+    if user_id not in user_session or user_session[user_id].get("state") != "active_firebase":
+        processing_msg = await message.reply("🔄 **Generating Direct Link...**")
+        
+        # File ID/Msg ID nikalo
+        msg_id, clean_name = await process_file_setup(message)
+        
+        if msg_id:
+            # Direct URL Construct karo
+            stream_link = f"{STREAM_BASE_URL}/stream/{msg_id}"
+            
+            await processing_msg.edit(
+                f"🎬 **File:** `{clean_name}`\n\n"
+                f"🔗 **Stream Link:**\n`{stream_link}`\n\n"
+                f"🆔 **ID:** `{msg_id}`",
+                disable_web_page_preview=True
+            )
+        else:
+            await processing_msg.edit("❌ Error: Could not forward to Log Channel.")
+        return
+    
+    # --- 2. FIREBASE UPLOAD LOGIC ---
+    session = user_session[user_id]
 
-    # FAST MODE: Add to Queue
     if session.get("fast_mode"):
         if "queue" not in session: session["queue"] = []
         session["queue"].append(message)
-        
         if not session.get("queue_running"):
             session["queue_running"] = True
             asyncio.create_task(process_queue(bot, user_id))
         return
 
-    # NORMAL MODE (One by one)
     msg = await message.reply("🔄 **Processing...**")
-    
-    # CHANGED: Get MSG ID
     msg_id, clean_name = await process_file_setup(message)
     
     if not msg_id:
-        return await msg.edit("❌ Error: Forwarding failed. Check LOG_CHANNEL.")
+        return await msg.edit("❌ Error: Forwarding failed.")
     
-    # Save ID in temp session
     session["temp_data"] = {"title": clean_name, "msg_id": msg_id}
     
     buttons = [
-        [InlineKeyboardButton("✅ Add (Default Name)", callback_data="fb_name_keep")],
+        [InlineKeyboardButton("✅ Add (Default)", callback_data="fb_name_keep")],
         [InlineKeyboardButton("✏️ Rename", callback_data="fb_name_rename")],
         [InlineKeyboardButton("❌ Cancel", callback_data="fb_clear_temp")]
     ]
-    
     await msg.edit(f"📂 **File:** `{clean_name}`\nProceed?", reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- Other Features (Minor Updates) ---
+# --- Other Features ---
 
 @Client.on_callback_query(filters.regex("^fb_toggle_fast"))
 async def toggle_fast_mode(bot, query: CallbackQuery):
@@ -333,7 +392,6 @@ async def set_fast_type(bot, query: CallbackQuery):
     user_session[user_id]["queue"] = []
     
     await query.answer("⚡ Fast Mode ON! Send multiple files now.", show_alert=True)
-    
     mod_id = user_session[user_id]["module_id"]
     mod_name = user_session[user_id].get("mod_name", "")
     query.data = f"fb_set_mod_{mod_id}|{mod_name}"
@@ -350,7 +408,8 @@ async def handle_text(bot, message):
         key = state.split("_")[2]
         new_name = message.text.strip()
         cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
-        db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures").child(key).update({"name": new_name})
+        path = f"categories/{cat}/batches/{batch}/modules/{mod}/lectures/{key}"
+        update_in_all_dbs(path, {"name": new_name})
         await message.reply_text(f"✅ Renamed to: `{new_name}`")
         user_session[user_id]["state"] = "active_firebase"
         
@@ -358,17 +417,19 @@ async def handle_text(bot, message):
         new_name = message.text.strip()
         user_session[user_id]["temp_data"]["title"] = new_name
         user_session[user_id]["state"] = "active_firebase"
-        # Pass msg_id
         await ask_file_type(message, new_name, user_session[user_id]["temp_data"]["msg_id"])
         
     elif state == "waiting_mod_creation":
         mod_name = message.text.strip()
         cat, batch = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"]
-        path = db.child("categories").child(cat).child("batches").child(batch).child("modules")
         ts = int(time.time() * 1000)
-        ref = path.push({"name": mod_name, "order": ts})
-        key = ref['name']
-        path.child(key).update({"id": key})
+        
+        path = f"categories/{cat}/batches/{batch}/modules"
+        data_packet = {"name": mod_name, "order": ts}
+        
+        # Use Helper to Save to All
+        save_to_all_dbs(path, data_packet, update_id=True)
+        
         await message.reply_text(f"✅ Created Module: `{mod_name}`")
         user_session[user_id]["state"] = "idle"
 
@@ -376,7 +437,6 @@ async def handle_text(bot, message):
 async def keep_name(bot, query):
     user_id = query.from_user.id
     data = user_session[user_id]["temp_data"]
-    # Pass msg_id
     await ask_file_type(query.message, data["title"], data["msg_id"])
 
 @Client.on_callback_query(filters.regex("^fb_name_rename"))
@@ -402,23 +462,19 @@ async def push_manual(bot, query):
     cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
     target = "lectures" if action == "lec" else "resources"
     
-    path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures") # Fixed path target
-    if action == "res":
-         path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("resources")
-
     ts = int(time.time() * 1000)
     
-    # CHANGED: Saving 'msg_id' (Number)
-    ref = path.push({
+    path = f"categories/{cat}/batches/{batch}/modules/{mod}/{target}"
+    data_packet = {
         "name": data["title"], 
-        "msg_id": data["msg_id"], # <-- Saving ID
+        "msg_id": data["msg_id"], 
         "order": ts
-    })
+    }
     
-    key = ref['name']
-    path.child(key).update({"id": key})
+    # SAVE TO ALL DBs
+    save_to_all_dbs(path, data_packet, update_id=True)
     
-    await query.message.edit_text("✅ **Added!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Hide", callback_data="fb_hide_msg")]]))
+    await query.message.edit_text("✅ **Added to ALL Servers!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Hide", callback_data="fb_hide_msg")]]))
 
 @Client.on_callback_query(filters.regex("^fb_manage_"))
 async def manage_menu(bot, query):
@@ -427,7 +483,8 @@ async def manage_menu(bot, query):
     cat, batch = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"]
     
     try:
-        data = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod_id).child("lectures").get().val()
+        # Read from First DB
+        data = all_dbs[0].child("categories").child(cat).child("batches").child(batch).child("modules").child(mod_id).child("lectures").get().val()
         buttons = []
         if data:
             iterator = data.items() if isinstance(data, dict) else enumerate(data)
@@ -453,8 +510,11 @@ async def del_item(bot, query):
     key = query.data.split("_")[2]
     user_id = query.from_user.id
     cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
-    db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures").child(key).remove()
-    await query.answer("Deleted!")
+    
+    path = f"categories/{cat}/batches/{batch}/modules/{mod}/lectures/{key}"
+    remove_from_all_dbs(path)
+    
+    await query.answer("Deleted from ALL Servers!")
     query.data = f"fb_manage_{mod}"
     await manage_menu(bot, query)
 
@@ -478,3 +538,4 @@ async def clear_session(bot, query):
 @Client.on_callback_query(filters.regex("^fb_hide_msg"))
 async def hide(bot, query):
     await query.message.delete()
+

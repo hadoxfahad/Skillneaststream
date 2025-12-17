@@ -4,7 +4,7 @@ import urllib.parse
 import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from info import * # Ensure LOG_CHANNEL & ADMINS are defined here
+from info import * # Ensure LOG_CHANNEL is defined here (e.g., LOG_CHANNEL = -100xxxxxxx)
 import pyrebase
 
 # --- 1. Firebase Configuration ---
@@ -29,39 +29,36 @@ user_session = {}
 
 async def process_file_setup(message: Message):
     """
-    CHANGED: Ab ye Link nahi banata, bas File ID aur Name nikalta hai.
-    Aur file ko Log Channel me forward karta hai taaki wo active rahe.
+    FIXED: Ab ye File ko Log Channel me forward karega aur MESSAGE ID (Number) return karega.
+    Isse 'Video Unavailable' error 100% fix ho jayega.
     """
     try:
-        # 1. Forward to Log Channel (Important for File ID to stay active)
-        # log_msg = await message.forward(LOG_CHANNEL) 
-        # Note: Agar Log Channel set nahi hai toh upar wali line uncomment karein aur info.py me LOG_CHANNEL dalein.
-        # Filhal hum direct ID le rahe hain assuming bot admin hai source channel me.
+        # 1. Forward to Log Channel (CRITICAL STEP)
+        # Ye line ab uncommented hai. Bot ko Log Channel me Admin bana dena.
+        log_msg = await message.forward(LOG_CHANNEL) 
         
-        file_id = None
+        # 2. Get Message ID (Integer, e.g., 2045)
+        msg_id = log_msg.id
+        
         file_name = "Unknown File"
         
         if message.video:
-            file_id = message.video.file_id
-            file_name = message.video.file_name or f"Video {message.id}.mp4"
+            file_name = message.video.file_name or f"Video {msg_id}.mp4"
         elif message.document:
-            file_id = message.document.file_id
-            file_name = message.document.file_name or f"File {message.id}.pdf"
+            file_name = message.document.file_name or f"File {msg_id}.pdf"
         elif message.audio:
-            file_id = message.audio.file_id
-            file_name = message.audio.file_name or f"Audio {message.id}.mp3"
+            file_name = message.audio.file_name or f"Audio {msg_id}.mp3"
             
-        if not file_id:
-            return None, None
-
         # Name Cleaning
         name_without_ext = os.path.splitext(file_name)[0]
         clean_name = name_without_ext.replace("_", " ").replace("-", " ")
         
-        return file_id, clean_name
+        # Return Integer ID and Name
+        return msg_id, clean_name
 
     except Exception as e:
         print(f"Error processing file: {e}")
+        # Agar Log Channel set nahi hai ya Bot admin nahi hai toh error aayega
         return None, None
 
 def get_name(data):
@@ -86,10 +83,10 @@ async def firebase_panel(bot, message):
     user_session[user_id] = {"state": "idle", "fast_mode": False, "queue": []}
     
     txt = (
-        "**🔥 Firebase Admin Panel 2.0 (Rotation Ready)**\n\n"
+        "**🔥 Firebase Admin Panel 3.0 (Fixed)**\n\n"
         "Database Status: 🟢 **Connected**\n"
         "Mode: **Smart Queue System**\n"
-        "Storage Type: **File IDs** (For Website Rotation)\n\n"
+        "Storage Type: **Message IDs** (Stable)\n\n"
         "👇 Select a Category to start:"
     )
     
@@ -98,7 +95,7 @@ async def firebase_panel(bot, message):
         [InlineKeyboardButton("⚙️ Settings", callback_data="fb_mode_menu")]
     ]))
 
-# --- Navigation Handlers ---
+# --- Navigation Handlers (No Changes Here) ---
 
 @Client.on_callback_query(filters.regex("^fb_cat_list"))
 async def list_categories(bot, query: CallbackQuery):
@@ -199,10 +196,10 @@ async def set_active_module(bot, query: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# --- FAST MODE QUEUE LOGIC (UPDATED FOR FILE ID) ---
+# --- FAST MODE QUEUE LOGIC (UPDATED FOR MSG ID) ---
 
 async def process_queue(bot, user_id):
-    """Processes collected files in strict order and saves FILE ID"""
+    """Processes collected files and saves Message ID (Number)"""
     await asyncio.sleep(4)
     
     if user_id not in user_session or not user_session[user_id]["queue"]:
@@ -232,19 +229,19 @@ async def process_queue(bot, user_id):
             if count == 1 or count % 3 == 0:
                 await status_msg.edit(f"🚀 **Uploading...** ({count}/{total_files})\nDo not send more files yet.")
             
-            # CHANGED: Get File ID instead of Link
-            file_id, clean_name = await process_file_setup(msg)
+            # CHANGED: Get MSG ID (Number)
+            msg_id, clean_name = await process_file_setup(msg)
             
-            if not file_id:
+            if not msg_id:
                 continue
 
             ts = int(time.time() * 1000)
             
-            # CHANGED: Pushing 'file_id' instead of 'link'
+            # CHANGED: Pushing 'msg_id'
             path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
             ref = path.push({
                 "name": clean_name, 
-                "file_id": file_id, # <-- Key Change
+                "msg_id": msg_id, # <-- Saving Number
                 "order": ts
             })
             
@@ -269,7 +266,7 @@ async def process_queue(bot, user_id):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Close", callback_data="fb_hide_msg")]])
     )
 
-# --- File Handler (Modified for File ID) ---
+# --- File Handler (Modified for MSG ID) ---
 
 @Client.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMINS))
 async def incoming_file_handler(bot, message):
@@ -292,14 +289,14 @@ async def incoming_file_handler(bot, message):
     # NORMAL MODE (One by one)
     msg = await message.reply("🔄 **Processing...**")
     
-    # CHANGED: Get File ID
-    file_id, clean_name = await process_file_setup(message)
+    # CHANGED: Get MSG ID
+    msg_id, clean_name = await process_file_setup(message)
     
-    if not file_id:
-        return await msg.edit("❌ Error: Could not get File ID.")
+    if not msg_id:
+        return await msg.edit("❌ Error: Forwarding failed. Check LOG_CHANNEL.")
     
-    # Save ID in temp session instead of URL
-    session["temp_data"] = {"title": clean_name, "file_id": file_id}
+    # Save ID in temp session
+    session["temp_data"] = {"title": clean_name, "msg_id": msg_id}
     
     buttons = [
         [InlineKeyboardButton("✅ Add (Default Name)", callback_data="fb_name_keep")],
@@ -309,7 +306,7 @@ async def incoming_file_handler(bot, message):
     
     await msg.edit(f"📂 **File:** `{clean_name}`\nProceed?", reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- Other Features ---
+# --- Other Features (Minor Updates) ---
 
 @Client.on_callback_query(filters.regex("^fb_toggle_fast"))
 async def toggle_fast_mode(bot, query: CallbackQuery):
@@ -361,8 +358,8 @@ async def handle_text(bot, message):
         new_name = message.text.strip()
         user_session[user_id]["temp_data"]["title"] = new_name
         user_session[user_id]["state"] = "active_firebase"
-        # Pass file_id instead of url
-        await ask_file_type(message, new_name, user_session[user_id]["temp_data"]["file_id"])
+        # Pass msg_id
+        await ask_file_type(message, new_name, user_session[user_id]["temp_data"]["msg_id"])
         
     elif state == "waiting_mod_creation":
         mod_name = message.text.strip()
@@ -379,8 +376,8 @@ async def handle_text(bot, message):
 async def keep_name(bot, query):
     user_id = query.from_user.id
     data = user_session[user_id]["temp_data"]
-    # Pass file_id
-    await ask_file_type(query.message, data["title"], data["file_id"])
+    # Pass msg_id
+    await ask_file_type(query.message, data["title"], data["msg_id"])
 
 @Client.on_callback_query(filters.regex("^fb_name_rename"))
 async def rename_ask(bot, query):
@@ -388,7 +385,7 @@ async def rename_ask(bot, query):
     user_session[user_id]["state"] = "waiting_for_name"
     await query.message.edit_text("✏️ **Send New Name:**")
 
-async def ask_file_type(message, title, file_id):
+async def ask_file_type(message, title, msg_id):
     buttons = [[InlineKeyboardButton("🎬 Lecture", callback_data="fb_confirm_lec"), InlineKeyboardButton("📄 Resource", callback_data="fb_confirm_res")]]
     txt = f"📍 **Confirm Upload:**\nName: `{title}`"
     if isinstance(message, Message):
@@ -405,13 +402,16 @@ async def push_manual(bot, query):
     cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
     target = "lectures" if action == "lec" else "resources"
     
-    path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
+    path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures") # Fixed path target
+    if action == "res":
+         path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("resources")
+
     ts = int(time.time() * 1000)
     
-    # CHANGED: Saving 'file_id'
+    # CHANGED: Saving 'msg_id' (Number)
     ref = path.push({
         "name": data["title"], 
-        "file_id": data["file_id"], # <-- Stored ID
+        "msg_id": data["msg_id"], # <-- Saving ID
         "order": ts
     })
     

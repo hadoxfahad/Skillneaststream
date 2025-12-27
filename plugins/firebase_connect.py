@@ -1,16 +1,14 @@
 import asyncio
 import os
-import urllib.parse
 import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from info import * # Ensure LOG_CHANNEL is defined here
 import pyrebase
+from info import *  # Ensure LOG_CHANNEL, ADMINS are defined here
 
 # --- 1. CONFIGURATION ---
 
-# Apni Website ka Link yahan daalo (Direct Link generate karne ke liye)
-STREAM_BASE_URL = "https://skillneaststream.onrender.com" 
+STREAM_BASE_URL = "https://skillneaststream.onrender.com"  # Apni Website ka Link
 
 firebaseConfig = {
     "apiKey": "AIzaSyChwpbFb6M4HtG6zwjg0AXh7Lz9KjnrGZk",
@@ -32,12 +30,10 @@ user_session = {}
 # --- Helper Functions ---
 
 async def process_file_setup(message: Message):
-    """
-    File ko Log Channel me forward karke Message ID (Number) return karega.
-    """
+    """File ko Log Channel me forward karke Message ID (Number) return karega."""
     try:
         # 1. Forward to Log Channel
-        log_msg = await message.forward(LOG_CHANNEL) 
+        log_msg = await message.forward(LOG_CHANNEL)
         
         # 2. Get Message ID
         msg_id = log_msg.id
@@ -78,6 +74,7 @@ def get_breadcrumb(user_id):
 @Client.on_message(filters.command("firebase") & filters.user(ADMINS))
 async def firebase_panel(bot, message):
     user_id = message.from_user.id
+    # Reset Session
     user_session[user_id] = {"state": "idle", "fast_mode": False, "queue": []}
     
     txt = (
@@ -170,11 +167,12 @@ async def set_active_module(bot, query: CallbackQuery):
     module_name = data_parts[1] if len(data_parts) > 1 else "Unknown"
     user_id = query.from_user.id
     
+    # IMPORTANT: Update State Here
     user_session[user_id].update({
         "module_id": module_id,
         "mod_name": module_name,
-        "state": "active_firebase",
-        "queue": []
+        "state": "active_firebase", # State set to ACTIVE
+        "queue": user_session[user_id].get("queue", [])
     })
     
     is_fast = user_session[user_id].get("fast_mode", False)
@@ -184,19 +182,77 @@ async def set_active_module(bot, query: CallbackQuery):
     buttons = [
         [InlineKeyboardButton("📝 Manage Content", callback_data=f"fb_manage_{module_id}")],
         [InlineKeyboardButton(fast_btn, callback_data="fb_toggle_fast")],
-        [InlineKeyboardButton("🛑 Stop", callback_data="fb_clear_session")]
+        [InlineKeyboardButton("🛑 Stop / Clear Session", callback_data="fb_clear_session")]
     ]
     
     path = get_breadcrumb(user_id)
     await query.message.edit_text(
-        f"✅ **Ready to Upload!**\n\n{path}\n\n⚡ **Fast Mode:** {fast_status}\n\n📥 **Send files now.**",
+        f"✅ **Ready to Upload!**\n\n{path}\n\n⚡ **Fast Mode:** {fast_status}\n\n📥 **Send files now to add to Firebase.**",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
+
+# --- FILE HANDLER (FIXED LOGIC) ---
+
+@Client.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMINS))
+async def incoming_file_handler(bot, message):
+    user_id = message.from_user.id
+    
+    # 1. Check Session State
+    session = user_session.get(user_id)
+    is_firebase_active = session and session.get("state") == "active_firebase"
+
+    # --- CASE A: Direct Link Generator (When NO Firebase Session) ---
+    if not is_firebase_active:
+        processing_msg = await message.reply("🔄 **Generating Direct Link...**")
+        msg_id, clean_name = await process_file_setup(message)
+        
+        if msg_id:
+            stream_link = f"{STREAM_BASE_URL}/stream/{msg_id}"
+            await processing_msg.edit(
+                f"🎬 **File:** `{clean_name}`\n\n"
+                f"🔗 **Stream Link:**\n`{stream_link}`\n\n"
+                f"🆔 **ID:** `{msg_id}`\n\n"
+                f"⚠️ *Note: Select Category > Batch to add to Firebase.*",
+                disable_web_page_preview=True
+            )
+        else:
+            await processing_msg.edit("❌ Error: Could not forward to Log Channel.")
+        return
+
+    # --- CASE B: Firebase Upload Logic (When Session IS Active) ---
+    
+    # 1. Fast Mode Logic
+    if session.get("fast_mode"):
+        if "queue" not in session: session["queue"] = []
+        session["queue"].append(message)
+        
+        # Start queue processor if not running
+        if not session.get("queue_running"):
+            session["queue_running"] = True
+            asyncio.create_task(process_queue(bot, user_id))
+        return
+
+    # 2. Normal Mode (One by One with Rename)
+    msg = await message.reply("🔄 **Processing for Firebase...**")
+    msg_id, clean_name = await process_file_setup(message)
+    
+    if not msg_id:
+        return await msg.edit("❌ Error: Forwarding failed.")
+    
+    # Save temp data for next step
+    session["temp_data"] = {"title": clean_name, "msg_id": msg_id}
+    
+    buttons = [
+        [InlineKeyboardButton("✅ Add (Default Name)", callback_data="fb_name_keep")],
+        [InlineKeyboardButton("✏️ Rename", callback_data="fb_name_rename")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="fb_clear_temp")]
+    ]
+    await msg.edit(f"📂 **File:** `{clean_name}`\n\n👇 **Select Action:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 # --- FAST MODE QUEUE LOGIC ---
 
 async def process_queue(bot, user_id):
-    await asyncio.sleep(4)
+    await asyncio.sleep(4) # Wait for more files
     
     if user_id not in user_session or not user_session[user_id]["queue"]:
         user_session[user_id]["queue_running"] = False
@@ -206,11 +262,13 @@ async def process_queue(bot, user_id):
     total_files = len(queue)
     status_msg = await bot.send_message(user_id, f"🔄 **Processing Batch...**\nFound {total_files} files.")
     
+    # Get IDs from Session
     cat = user_session[user_id]["cat_id"]
     batch = user_session[user_id]["batch_id"]
     mod = user_session[user_id]["module_id"]
-    def_type = user_session[user_id]["default_type"]
-    target = "lectures" if def_type == "lec" else "resources"
+    def_type = user_session[user_id].get("default_type", "lec") # Default to lecture if missing
+    
+    target_node = "lectures" if def_type == "lec" else "resources"
     
     count = 0
     uploaded_names = []
@@ -225,12 +283,12 @@ async def process_queue(bot, user_id):
             if not msg_id: continue
 
             ts_order = int(time.time() * 1000)
-            timestamp = int(time.time()) # Current Time in Seconds
+            timestamp = int(time.time()) 
             
-            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target)
+            # Correct Path Construction
+            path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target_node)
             
-            # --- SAVING DATA (Only MSG ID + Timestamp) ---
-            # URL Hata diya hai yahan se
+            # Save to Firebase
             ref = path.push({
                 "name": clean_name, 
                 "msg_id": msg_id, 
@@ -238,14 +296,16 @@ async def process_queue(bot, user_id):
                 "timestamp": timestamp
             })
             
+            # Update ID key inside the node
             key = ref['name']
             path.child(key).update({"id": key})
             
             uploaded_names.append(clean_name)
             
         except Exception as e:
-            print(f"Failed to upload: {e}")
+            print(f"Failed to upload {clean_name}: {e}")
 
+    # Clear Queue
     user_session[user_id]["queue"] = []
     user_session[user_id]["queue_running"] = False
     
@@ -257,60 +317,6 @@ async def process_queue(bot, user_id):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑 Close", callback_data="fb_hide_msg")]])
     )
 
-# --- FILE HANDLER (DIRECT LINK + UPLOAD) ---
-
-@Client.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMINS))
-async def incoming_file_handler(bot, message):
-    user_id = message.from_user.id
-    
-    # --- 1. DIRECT STREAM LINK GENERATOR (Bina Category Selection Ke) ---
-    # Ye tab chalega jab user FIREBASE mode me NAHI hai.
-    if user_id not in user_session or user_session[user_id].get("state") != "active_firebase":
-        processing_msg = await message.reply("🔄 **Generating Direct Link...**")
-        
-        # File ID/Msg ID nikalo
-        msg_id, clean_name = await process_file_setup(message)
-        
-        if msg_id:
-            # Direct URL Construct karo (Sirf chat me dikhane ke liye)
-            stream_link = f"{STREAM_BASE_URL}/stream/{msg_id}"
-            
-            await processing_msg.edit(
-                f"🎬 **File:** `{clean_name}`\n\n"
-                f"🔗 **Stream Link:**\n`{stream_link}`\n\n"
-                f"🆔 **ID:** `{msg_id}`",
-                disable_web_page_preview=True
-            )
-        else:
-            await processing_msg.edit("❌ Error: Could not forward to Log Channel.")
-        return
-    
-    # --- 2. FIREBASE UPLOAD LOGIC ---
-    session = user_session[user_id]
-
-    if session.get("fast_mode"):
-        if "queue" not in session: session["queue"] = []
-        session["queue"].append(message)
-        if not session.get("queue_running"):
-            session["queue_running"] = True
-            asyncio.create_task(process_queue(bot, user_id))
-        return
-
-    msg = await message.reply("🔄 **Processing...**")
-    msg_id, clean_name = await process_file_setup(message)
-    
-    if not msg_id:
-        return await msg.edit("❌ Error: Forwarding failed.")
-    
-    session["temp_data"] = {"title": clean_name, "msg_id": msg_id}
-    
-    buttons = [
-        [InlineKeyboardButton("✅ Add (Default Name)", callback_data="fb_name_keep")],
-        [InlineKeyboardButton("✏️ Rename", callback_data="fb_name_rename")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="fb_clear_temp")]
-    ]
-    await msg.edit(f"📂 **File:** `{clean_name}`\nProceed?", reply_markup=InlineKeyboardMarkup(buttons))
-
 # --- Other Features ---
 
 @Client.on_callback_query(filters.regex("^fb_toggle_fast"))
@@ -320,12 +326,13 @@ async def toggle_fast_mode(bot, query: CallbackQuery):
     
     if not current_status:
         buttons = [[InlineKeyboardButton("🎬 Lectures", callback_data="fb_set_fast_lec"), InlineKeyboardButton("📄 Resources", callback_data="fb_set_fast_res")]]
-        await query.message.edit_text("**⚡ Fast Mode Setup**\nSelect content type:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text("**⚡ Fast Mode Setup**\nSelect content type for bulk upload:", reply_markup=InlineKeyboardMarkup(buttons))
     else:
         user_session[user_id]["fast_mode"] = False
         user_session[user_id]["queue"] = []
         mod_id = user_session[user_id]["module_id"]
         mod_name = user_session[user_id].get("mod_name", "")
+        # Refresh Module View
         query.data = f"fb_set_mod_{mod_id}|{mod_name}"
         await set_active_module(bot, query)
 
@@ -333,11 +340,13 @@ async def toggle_fast_mode(bot, query: CallbackQuery):
 async def set_fast_type(bot, query: CallbackQuery):
     user_id = query.from_user.id
     type_ = query.data.split("_")[3]
+    
     user_session[user_id]["fast_mode"] = True
     user_session[user_id]["default_type"] = type_
     user_session[user_id]["queue"] = []
     
     await query.answer("⚡ Fast Mode ON! Send multiple files now.", show_alert=True)
+    
     mod_id = user_session[user_id]["module_id"]
     mod_name = user_session[user_id].get("mod_name", "")
     query.data = f"fb_set_mod_{mod_id}|{mod_name}"
@@ -350,20 +359,29 @@ async def handle_text(bot, message):
     
     state = user_session[user_id].get("state", "")
     
+    # Rename Existing Logic
     if state.startswith("waiting_edit_"):
         key = state.split("_")[2]
         new_name = message.text.strip()
         cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
-        db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures").child(key).update({"name": new_name})
+        
+        # Try finding in lectures first, then resources (Simple logic)
+        try:
+            db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("lectures").child(key).update({"name": new_name})
+        except:
+             db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("resources").child(key).update({"name": new_name})
+             
         await message.reply_text(f"✅ Renamed to: `{new_name}`")
         user_session[user_id]["state"] = "active_firebase"
         
+    # Rename New Upload Logic
     elif state == "waiting_for_name":
         new_name = message.text.strip()
         user_session[user_id]["temp_data"]["title"] = new_name
         user_session[user_id]["state"] = "active_firebase"
         await ask_file_type(message, new_name, user_session[user_id]["temp_data"]["msg_id"])
         
+    # Create Module Logic
     elif state == "waiting_mod_creation":
         mod_name = message.text.strip()
         cat, batch = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"]
@@ -373,8 +391,11 @@ async def handle_text(bot, message):
         ref = path.push({"name": mod_name, "order": ts})
         key = ref['name']
         path.child(key).update({"id": key})
+        
         await message.reply_text(f"✅ Created Module: `{mod_name}`")
-        user_session[user_id]["state"] = "idle"
+        user_session[user_id]["state"] = "active_firebase" # Return to active state if possible? Or idle
+        # Usually better to go back to batch list logic or stay idle
+        user_session[user_id]["state"] = "idle" 
 
 @Client.on_callback_query(filters.regex("^fb_name_keep"))
 async def keep_name(bot, query):
@@ -388,9 +409,16 @@ async def rename_ask(bot, query):
     user_session[user_id]["state"] = "waiting_for_name"
     await query.message.edit_text("✏️ **Send New Name:**")
 
+@Client.on_callback_query(filters.regex("^fb_clear_temp"))
+async def clear_temp(bot, query):
+    user_id = query.from_user.id
+    user_session[user_id]["state"] = "active_firebase"
+    if "temp_data" in user_session[user_id]: del user_session[user_id]["temp_data"]
+    await query.message.delete()
+
 async def ask_file_type(message, title, msg_id):
     buttons = [[InlineKeyboardButton("🎬 Lecture", callback_data="fb_confirm_lec"), InlineKeyboardButton("📄 Resource", callback_data="fb_confirm_res")]]
-    txt = f"📍 **Confirm Upload:**\nName: `{title}`"
+    txt = f"📍 **Confirm Upload:**\nName: `{title}`\nSelect Type:"
     if isinstance(message, Message):
         await message.reply_text(txt, reply_markup=InlineKeyboardMarkup(buttons))
     else:
@@ -400,20 +428,23 @@ async def ask_file_type(message, title, msg_id):
 async def push_manual(bot, query):
     action = query.data.split("_")[2]
     user_id = query.from_user.id
-    data = user_session[user_id]["temp_data"]
     
-    cat, batch, mod = user_session[user_id]["cat_id"], user_session[user_id]["batch_id"], user_session[user_id]["module_id"]
-    target = "lectures" if action == "lec" else "resources"
+    if "temp_data" not in user_session[user_id]:
+        await query.answer("Session Expired.", show_alert=True)
+        return
+
+    data = user_session[user_id]["temp_data"]
+    cat = user_session[user_id]["cat_id"]
+    batch = user_session[user_id]["batch_id"]
+    mod = user_session[user_id]["module_id"]
+    
+    target_node = "lectures" if action == "lec" else "resources"
     
     ts_order = int(time.time() * 1000)
-    timestamp = int(time.time()) # Current Time
+    timestamp = int(time.time())
     
-    path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target) # Fixed path target
-    if action == "res":
-         path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child("resources")
+    path = db.child("categories").child(cat).child("batches").child(batch).child("modules").child(mod).child(target_node)
 
-    # --- SAVING DATA (Only MSG ID + Timestamp) ---
-    # URL Hata diya hai yahan se
     ref = path.push({
         "name": data["title"], 
         "msg_id": data["msg_id"], 
@@ -424,7 +455,10 @@ async def push_manual(bot, query):
     key = ref['name']
     path.child(key).update({"id": key})
     
-    await query.message.edit_text("✅ **Added!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Hide", callback_data="fb_hide_msg")]]))
+    # Cleanup
+    del user_session[user_id]["temp_data"]
+    
+    await query.message.edit_text("✅ **Successfully Added to Firebase!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Hide", callback_data="fb_hide_msg")]]))
 
 @Client.on_callback_query(filters.regex("^fb_manage_"))
 async def manage_menu(bot, query):
@@ -442,7 +476,7 @@ async def manage_menu(bot, query):
                     buttons.append([InlineKeyboardButton(f"📄 {get_name(val)}", callback_data=f"fb_item_opt_{key}")])
         
         buttons.append([InlineKeyboardButton("🔙 Back", callback_data=f"fb_set_mod_{mod_id}|")])
-        await query.message.edit_text("**Manage Content:**", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.message.edit_text("**Manage Content (Lectures):**", reply_markup=InlineKeyboardMarkup(buttons))
     except:
         await query.message.edit_text("Error fetching list.")
 
@@ -477,9 +511,10 @@ async def create_mod_ask(bot, query):
 
 @Client.on_callback_query(filters.regex("^fb_clear_session"))
 async def clear_session(bot, query):
-    if query.from_user.id in user_session:
-        del user_session[query.from_user.id]
-    await query.message.edit_text("Stopped.")
+    user_id = query.from_user.id
+    # Reset completely
+    user_session[user_id] = {"state": "idle", "fast_mode": False}
+    await query.message.edit_text("🛑 **Session Cleared.**\nSend file to generate Direct Link, or /firebase to start again.")
 
 @Client.on_callback_query(filters.regex("^fb_hide_msg"))
 async def hide(bot, query):
